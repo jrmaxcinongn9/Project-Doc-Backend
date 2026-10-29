@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MinLength, Matches } from 'class-validator';
  
 export class RegisterAdminDTO{
   @IsNotEmpty({ message: 'Name is required' })
@@ -7,6 +7,7 @@ export class RegisterAdminDTO{
 
   @IsEmail({}, { message: 'Please provide a valid email address' })
   @IsNotEmpty({ message: 'Email is required' })
+  @Matches(/@mail\.kmutt\.ac\.th$/i, { message: 'Email must end with @mail.kmutt.ac.th' })
   email: string;
 
   @IsString({ message: 'Password must be a string' })
