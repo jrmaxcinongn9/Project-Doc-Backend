@@ -41,13 +41,35 @@ import { RequestLoggerMiddleware } from './logger/request.middleware';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        const uri =
+        const configured =
           config.get<string>('MONGODB_URI') ||
-          process.env.MONGODB_URI ||
-          'mongodb://localhost:27017/backproject1_5';
+          process.env.MONGODB_URI;
+
+        // บน cloud (Render) ไม่มี MongoDB ที่ localhost
+        // ถ้า env หายต้องพังทันทีพร้อมบอกสาเหตุ ไม่ใช่ค้างเงียบ ๆ
+        const onCloud =
+          process.env.RENDER !== undefined ||
+          process.env.NODE_ENV === 'production';
+
+        if (!configured && onCloud) {
+          throw new Error(
+            'MONGODB_URI is not set. ตั้งค่า env นี้ให้ชี้ไป MongoDB Atlas ก่อน deploy',
+          );
+        }
+
+        const uri =
+          configured || 'mongodb://localhost:27017/backproject1_5';
+
+        // ต่อไม่ได้ให้ล้มเร็ว ไม่ใช่ค้างจนไม่มีใคร listen พอร์ต
+        const common = {
+          serverSelectionTimeoutMS: 10000,
+          retryAttempts: 2,
+          retryDelay: 2000,
+        };
 
         if (uri.includes('localhost:27017')) {
           return {
+            ...common,
             uri,
             user: config.get<string>('MONGO_USER') || 'root',
             pass: config.get<string>('MONGO_PASS') || 'example',
@@ -55,7 +77,7 @@ import { RequestLoggerMiddleware } from './logger/request.middleware';
           };
         }
 
-        return { uri };
+        return { ...common, uri };
       },
     }),
 
