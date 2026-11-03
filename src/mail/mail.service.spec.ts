@@ -25,6 +25,149 @@ describe('MailService', () => {
     delete (global as any).fetch;
   });
 
+  describe('เมื่อมีคู่กุญแจของ Mailjet', () => {
+    const base = {
+      MAILJET_API_KEY: 'mj-key',
+      MAILJET_SECRET_KEY: 'mj-secret',
+      FROM_EMAIL: 'noreply@example.com',
+    };
+
+    function okResponse() {
+      return {
+        ok: true,
+        json: async () => ({ Messages: [{ Status: 'success' }] }),
+      };
+    }
+
+    it('ไม่แตะ nodemailer เลย', () => {
+      new MailService(configWith(base));
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('ยิง HTTPS ไปที่ Mailjet พร้อม Basic auth และเนื้อหา', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(okResponse());
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(configWith(base));
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, options] = fetchMock.mock.calls[0];
+
+      expect(url).toBe('https://api.mailjet.com/v3.1/send');
+      expect(options.method).toBe('POST');
+
+      const expected = Buffer.from('mj-key:mj-secret').toString('base64');
+      expect(options.headers.Authorization).toBe(`Basic ${expected}`);
+
+      const message = JSON.parse(options.body).Messages[0];
+      expect(message.From).toEqual({ Email: 'noreply@example.com' });
+      expect(message.To).toEqual([{ Email: 'student@mail.kmutt.ac.th' }]);
+      expect(message.HTMLPart).toContain('https://x/y');
+    });
+
+    it('OTP ก็ไปทาง Mailjet เหมือนกัน', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(okResponse());
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(configWith(base));
+      await service.sendResetOtpMail('student@mail.kmutt.ac.th', '123456');
+
+      const message = JSON.parse(fetchMock.mock.calls[0][1].body).Messages[0];
+      expect(message.HTMLPart).toContain('123456');
+    });
+
+    it('ตอบไม่ ok แล้วโยน error พร้อมรายละเอียด', async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: async () => '{"ErrorMessage":"API key authentication failed"}',
+      });
+
+      const service = new MailService(configWith(base));
+      await expect(
+        service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y'),
+      ).rejects.toThrow('Mailjet ตอบ 401:');
+    });
+
+    it('ตอบ 200 แต่ Status ไม่ success ก็ต้องถือว่าพลาด', async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          Messages: [{ Status: 'error', Errors: [{ ErrorMessage: 'boom' }] }],
+        }),
+      });
+
+      const service = new MailService(configWith(base));
+      await expect(
+        service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y'),
+      ).rejects.toThrow('Mailjet ไม่ได้ส่ง');
+    });
+
+    it('มาก่อน Resend เมื่อตั้งไว้ทั้งคู่', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(okResponse());
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({ ...base, RESEND_API_KEY: 'resend-key' }),
+      );
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        'https://api.mailjet.com/v3.1/send',
+      );
+    });
+
+    it('มีกุญแจไม่ครบคู่ ต้องข้ามไปใช้ Resend แทน', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({
+          MAILJET_API_KEY: 'mj-key',
+          RESEND_API_KEY: 'resend-key',
+          FROM_EMAIL: 'noreply@example.com',
+        }),
+      );
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      expect(fetchMock.mock.calls[0][0]).toBe('https://api.resend.com/emails');
+    });
+
+    it('ไม่มี FROM_EMAIL แล้วโยน error แทนที่จะยิงออกไป', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(okResponse());
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({
+          MAILJET_API_KEY: 'mj-key',
+          MAILJET_SECRET_KEY: 'mj-secret',
+        }),
+      );
+      await expect(
+        service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y'),
+      ).rejects.toThrow('ใช้ Mailjet ต้องตั้ง FROM_EMAIL');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('ถอยไปใช้ SMTP_USER เป็นผู้ส่งได้ถ้าไม่มี FROM_EMAIL', async () => {
+      const fetchMock = jest.fn().mockResolvedValue(okResponse());
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({
+          MAILJET_API_KEY: 'mj-key',
+          MAILJET_SECRET_KEY: 'mj-secret',
+          SMTP_USER: 'sender@example.com',
+        }),
+      );
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      const message = JSON.parse(fetchMock.mock.calls[0][1].body).Messages[0];
+      expect(message.From).toEqual({ Email: 'sender@example.com' });
+    });
+  });
+
   describe('เมื่อมี RESEND_API_KEY', () => {
     const base = {
       RESEND_API_KEY: 'test-key',
