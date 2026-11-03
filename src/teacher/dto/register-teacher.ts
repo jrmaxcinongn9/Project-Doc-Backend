@@ -1,4 +1,5 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, IsArray, IsNumber, IsOptional, Matches } from 'class-validator';
+import { IsEmail, IsEnum, IsNotEmpty, IsString, MinLength, Matches } from 'class-validator';
+import { Category } from '../../shared/enums/category.enum';
 
 export class RegisterTeacherDTO {
   @IsNotEmpty({ message: 'Name is required' })
@@ -13,4 +14,9 @@ export class RegisterTeacherDTO {
   @IsString({ message: 'Password must be a string' })
   @MinLength(6, { message: 'Password must be at least 6 characters long' })
   password: string;
+
+  // ความเชี่ยวชาญของครู ใช้จับคู่กับนักเรียน
+  @IsEnum(Category, { message: 'category is not a valid value' })
+  @IsNotEmpty({ message: 'category is required' })
+  category: Category;
 }

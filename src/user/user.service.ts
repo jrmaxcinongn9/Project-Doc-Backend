@@ -5,13 +5,23 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { User, UserDocument, UserRole } from './schema/user.schema';
+import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
+import { MailService } from '../mail/mail.service';
+import {
+  AccountStatus,
+  User,
+  UserDocument,
+  UserRole,
+} from './schema/user.schema';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    private readonly mailService: MailService,
+    private readonly configService: ConfigService,
   ) {}
 
   // ==========================
@@ -22,9 +32,9 @@ export class UserService {
   email: string;
   password: string;
   role?: UserRole;
-  academicYear?: number; // ✅ แก้ตรงนี้
   major?: string;
   student_id?: string;
+  category?: string;
 }) {
     // ✅ check email ซ้ำ
     const emailExists = await this.userModel.findOne({
@@ -35,13 +45,15 @@ export class UserService {
       throw new BadRequestException('Email already exists');
     }
 
-    // ✅ check student_id ซ้ำ (สำคัญ)
-    const studentExists = await this.userModel.findOne({
-      student_id: data.student_id,
-    });
+    // ✅ check student_id ซ้ำ (เช็คเฉพาะตอนมีค่า ครูกับ admin ไม่มีรหัสนักศึกษา)
+    if (data.student_id) {
+      const studentExists = await this.userModel.findOne({
+        student_id: data.student_id,
+      });
 
-    if (studentExists) {
-      throw new BadRequestException('Student ID already exists');
+      if (studentExists) {
+        throw new BadRequestException('Student ID already exists');
+      }
     }
 
     try {
@@ -100,5 +112,83 @@ export class UserService {
     }
 
     return { message: 'Deleted successfully' };
+  }
+
+  // หา user จาก token ยืนยันอีเมล
+  async findByVerifyToken(token: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ verifyToken: token }).exec();
+  }
+
+  // รายชื่อที่รอ admin อนุมัติ
+  async findPending(): Promise<UserDocument[]> {
+    return this.userModel
+      .find({ status: AccountStatus.PENDING })
+      .select('-password')
+      .exec();
+  }
+
+  // admin กดอนุมัติหรือปฏิเสธ
+  async setStatus(
+    id: string,
+    status: AccountStatus,
+    approvedBy?: string,
+  ): Promise<UserDocument> {
+    const user = await this.userModel.findById(id).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    user.status = status;
+    (user as any).approvedBy = approvedBy;
+    (user as any).approvedAt = new Date();
+
+    return user.save();
+  }
+
+  // สร้าง token ยืนยันอีเมลแล้วส่งลิงก์ให้ผู้สมัคร
+  async sendVerifyMail(id: string): Promise<void> {
+    const user = await this.userModel.findById(id).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const token = randomBytes(32).toString('hex');
+    const expires = new Date();
+    expires.setHours(expires.getHours() + 24);
+
+    (user as any).verifyToken = token;
+    (user as any).verifyTokenExpires = expires;
+    await user.save();
+
+    const base =
+      this.configService.get<string>('FRONTEND_URL') ||
+      'http://localhost:8000';
+
+    await this.mailService.sendVerifyMail(
+      user.email,
+      `${base}/verify-email?token=${token}`,
+    );
+  }
+
+  // ผู้ใช้กดลิงก์ในเมล
+  async verifyEmail(token: string): Promise<void> {
+    if (!token) {
+      throw new BadRequestException('ไม่พบ token สำหรับยืนยันอีเมล');
+    }
+
+    const user = await this.userModel.findOne({ verifyToken: token }).exec();
+    if (!user) {
+      throw new BadRequestException('ลิงก์ยืนยันไม่ถูกต้องหรือถูกใช้ไปแล้ว');
+    }
+
+    const expires = (user as any).verifyTokenExpires as Date | undefined;
+    if (!expires || expires.getTime() < Date.now()) {
+      throw new BadRequestException('ลิงก์ยืนยันหมดอายุแล้ว กรุณาขอลิงก์ใหม่');
+    }
+
+    (user as any).isVerified = true;
+    (user as any).verifyToken = undefined;
+    (user as any).verifyTokenExpires = undefined;
+    await user.save();
   }
 }

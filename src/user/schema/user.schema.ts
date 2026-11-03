@@ -10,6 +10,13 @@ export enum UserRole {
   TEACHER = 'TEACHER',
 }
 
+// สถานะการอนุมัติบัญชี admin ต้องกด accept ก่อนถึงจะ login ได้
+export enum AccountStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
 @Schema({
   timestamps: true,
 })
@@ -43,29 +50,64 @@ export class User {
   @Prop()
   resetOtpExpires?: Date;
 
-  @Prop({ required: true })
-  academicYear: string;
+  // ยืนยันอีเมล ต้องกดลิงก์ในเมลก่อนถึงจะ login ได้
+  @Prop({ default: false })
+  isVerified: boolean;
 
-  @Prop({ required: true })
-  major: string;
+  @Prop({ index: true })
+  verifyToken?: string;
+
+  @Prop()
+  verifyTokenExpires?: Date;
+
+  // รออนุมัติจาก admin
+  @Prop({
+    type: String,
+    enum: AccountStatus,
+    default: AccountStatus.PENDING,
+    index: true,
+  })
+  status: AccountStatus;
+
+  @Prop()
+  approvedBy?: string;
+
+  @Prop()
+  approvedAt?: Date;
+
+  // สาขาของสถานประกอบการที่ไปฝึก ใช้จับคู่กับความเชี่ยวชาญของครู
+  @Prop({ trim: true, index: true })
+  category?: string;
+
+  // ปีการศึกษาไม่ได้อยู่กับ user แล้ว ย้ายไปเป็นของ classroom
+  // คงฟิลด์ไว้แบบไม่บังคับเพื่อไม่ให้ข้อมูลเดิมพัง
+  @Prop()
+  academicYear?: string;
+
+  // บังคับเฉพาะนักเรียน ครูกับ admin ไม่มีสาขาเรียนและรหัสนักศึกษา
+  @Prop({
+    required: function (this: any) {
+      return this.role === UserRole.USER;
+    },
+  })
+  major?: string;
 
   // ⭐⭐⭐ สำคัญสุด
   @Prop({
-    required: true,
+    required: function (this: any) {
+      return this.role === UserRole.USER;
+    },
     unique: true,
+    sparse: true,
     trim: true,
-    index: true,
   })
-  student_id: string;
+  student_id?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-//
-// ✅ FORCE UNIQUE INDEX (สำคัญมาก)
-//
-UserSchema.index({ email: 1 }, { unique: true });
-UserSchema.index({ student_id: 1 }, { unique: true });
+// unique index ประกาศไว้ที่ @Prop แล้ว
+// ถ้าประกาศซ้ำที่นี่ mongoose จะเตือน Duplicate schema index ทุกครั้งที่ boot
 
 //
 // ✅ HASH PASSWORD

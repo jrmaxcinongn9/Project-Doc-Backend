@@ -15,7 +15,7 @@ import { UserModule } from '../user/user.module';
 import { AdminModule } from '../admin/admin.module';
 import { TeacherModule } from '../teacher/teacher.module';
 
-import { MailService } from '../mail/mail.service';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
@@ -37,6 +37,7 @@ import { MailService } from '../mail/mail.service';
     UserModule,
     AdminModule,
     TeacherModule,
+    MailModule,
   ],
   controllers: [AuthController],
   providers: [
@@ -44,7 +45,6 @@ import { MailService } from '../mail/mail.service';
     LocalStrategy,
     JwtStrategy,
     RolesGuard,
-    MailService, // ใช้ส่งเมล reset password
   ],
   exports: [
     AuthService,

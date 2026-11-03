@@ -59,4 +59,26 @@ export class MailService {
     `,
   });
 }
+
+  // เมลยืนยันตอนสมัคร ต้องกดลิงก์นี้ก่อนถึงจะ login ได้
+  async sendVerifyMail(to: string, link: string) {
+    const from =
+      this.configService.get<string>('FROM_EMAIL') ||
+      this.configService.get<string>('SMTP_USER') ||
+      'noreply@example.com';
+
+    await this.transporter.sendMail({
+      from,
+      to,
+      subject: 'ยืนยันอีเมลเพื่อเปิดใช้งานบัญชีของคุณ',
+      html: `
+        <p>สวัสดีครับ</p>
+        <p>มีการสมัครบัญชีด้วยอีเมลนี้ กรุณากดลิงก์ด้านล่างเพื่อยืนยัน</p>
+        <p><a href="${link}">ยืนยันอีเมลของฉัน</a></p>
+        <p>ลิงก์นี้จะหมดอายุใน 24 ชั่วโมง</p>
+        <p>หลังยืนยันแล้ว บัญชีจะอยู่ในสถานะรอผู้ดูแลระบบอนุมัติอีกขั้นหนึ่ง</p>
+        <p>ถ้าคุณไม่ได้สมัคร ไม่ต้องทำอะไรกับอีเมลฉบับนี้</p>
+      `,
+    });
+  }
 }
