@@ -1,5 +1,6 @@
 import { IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, MinLength,Min,Max,Matches} from 'class-validator';
 import { UserRole } from '../schema/user.schema';
+import { Category } from '../../shared/enums/category.enum';
 import { Type } from 'class-transformer';
 
 export class RegisterDTO {
@@ -23,12 +24,10 @@ export class RegisterDTO {
   @IsEnum(UserRole)
   role?: UserRole;
 
-@Type(() => Number)
-@IsNumber()
-@IsNotEmpty()
-@Min(1000, { message: 'academicYear must be 4 digits' })
-@Max(9999, { message: 'academicYear must be 4 digits' })
-academicYear: number;
+  // สาขาของสถานประกอบการที่ไปฝึก ใช้จับคู่กับครู
+  @IsEnum(Category, { message: 'category is not a valid value' })
+  @IsNotEmpty({ message: 'category is required' })
+  category: Category;
 
   @IsString()
   @IsNotEmpty()

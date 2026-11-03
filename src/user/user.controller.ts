@@ -15,7 +15,7 @@ import {
 
 import { UserService } from './user.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { UserRole } from './schema/user.schema';
+import { AccountStatus, UserRole } from './schema/user.schema';
 import { RegisterDTO } from './dto/register.dto';
 
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -28,9 +28,62 @@ export class UserController {
   constructor(private readonly userService: UserService) {}
 
   // สมัคร user
+  // สมัครแล้วยังเข้าใช้งานไม่ได้ ต้องยืนยันอีเมลและรอ admin อนุมัติก่อน
   @Post('register')
   async register(@Body() body: RegisterDTO) {
-    return this.userService.create(body);
+    const created: any = await this.userService.create(body);
+
+    // ส่งเมลยืนยันแบบไม่ให้ล้มทั้งการสมัคร ถ้า SMTP ใช้ไม่ได้
+    try {
+      await this.userService.sendVerifyMail(created._id?.toString?.() ?? created.id);
+    } catch (err) {
+      console.error('ส่งเมลยืนยันไม่สำเร็จ:', err);
+    }
+
+    return {
+      ...created,
+      message:
+        'สมัครสำเร็จ กรุณายืนยันอีเมลจากลิงก์ที่ส่งไป แล้วรอผู้ดูแลระบบอนุมัติ',
+    };
+  }
+
+  // ผู้ใช้กดลิงก์ยืนยันจากในเมล
+  @Get('verify-email')
+  async verifyEmail(@Query('token') token: string) {
+    await this.userService.verifyEmail(token);
+    return { message: 'ยืนยันอีเมลเรียบร้อย บัญชีอยู่ระหว่างรอผู้ดูแลระบบอนุมัติ' };
+  }
+
+  // รายชื่อที่รออนุมัติ
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Get('pending')
+  async findPending() {
+    return this.userService.findPending();
+  }
+
+  // admin อนุมัติ
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/approve')
+  async approve(@Param('id') id: string, @Request() req) {
+    return this.userService.setStatus(
+      id,
+      AccountStatus.APPROVED,
+      req.user?.email,
+    );
+  }
+
+  // admin ปฏิเสธ
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/reject')
+  async reject(@Param('id') id: string, @Request() req) {
+    return this.userService.setStatus(
+      id,
+      AccountStatus.REJECTED,
+      req.user?.email,
+    );
   }
 
   // โปรไฟล์ตัวเอง

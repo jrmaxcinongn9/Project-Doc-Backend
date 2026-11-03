@@ -3,6 +3,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
@@ -11,7 +12,7 @@ import { MailService } from '../mail/mail.service';
 import { randomInt } from 'crypto';
 
 import { UserService } from '../user/user.service';
-import { UserRole } from '../user/schema/user.schema';
+import { AccountStatus, UserRole } from '../user/schema/user.schema';
 
 @Injectable()
 export class AuthService {
@@ -22,6 +23,26 @@ export class AuthService {
     private readonly mailService: MailService,
   ) {}
 
+  // ด่านที่ต้องผ่านก่อน login ได้ ใช้ร่วมกันทุก role
+  // ADMIN ข้ามด่านอนุมัติ เพราะไม่มีใครอนุมัติ admin คนแรกให้
+  private assertCanLogin(user: any): void {
+    if (user.role === UserRole.ADMIN) return;
+
+    if (user.isVerified === false) {
+      throw new ForbiddenException(
+        'กรุณายืนยันอีเมลก่อนเข้าใช้งาน ตรวจสอบลิงก์ยืนยันในกล่องจดหมายของคุณ',
+      );
+    }
+
+    if (user.status === AccountStatus.REJECTED) {
+      throw new ForbiddenException('บัญชีนี้ไม่ได้รับการอนุมัติ');
+    }
+
+    if (user.status !== AccountStatus.APPROVED) {
+      throw new ForbiddenException('บัญชีนี้อยู่ระหว่างรอผู้ดูแลระบบอนุมัติ');
+    }
+  }
+
   // ✅ ใช้กับ LocalStrategy (/auth/login)
   async validateUser(email: string, password: string): Promise<any> {
     const user = await this.userService.findByEmail(email);
@@ -29,6 +50,8 @@ export class AuthService {
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return null;
+
+    this.assertCanLogin(user);
 
     return user;
   }
@@ -43,6 +66,8 @@ export class AuthService {
 
     if (user.role !== UserRole.ADMIN) return null;
 
+    this.assertCanLogin(user);
+
     return user;
   }
 
@@ -53,6 +78,7 @@ export class AuthService {
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) return null;
   if (user.role !== UserRole.TEACHER) return null;
+  this.assertCanLogin(user);
   return user;
 }
 
