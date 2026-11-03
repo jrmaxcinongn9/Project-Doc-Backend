@@ -13,27 +13,54 @@ export class MailService {
     const user = this.configService.get<string>('SMTP_USER');
     const pass = this.configService.get<string>('SMTP_PASS');
 
+    const portNumber = Number(port) || 587;
+
+    // พอร์ต 465 คุยกันด้วย TLS ตั้งแต่วินาทีแรก ต้อง secure เป็น true
+    // ส่วน 587 เริ่มแบบ plain แล้วค่อยยกระดับด้วย STARTTLS จึงต้องเป็น false
+    // ตั้ง SMTP_SECURE ทับได้ถ้าผู้ให้บริการใช้กติกาอื่น
+    const secureSetting = this.configService.get<string>('SMTP_SECURE');
+    const secure =
+      secureSetting !== undefined
+        ? secureSetting === 'true'
+        : portNumber === 465;
+
     console.log('==== SMTP CONFIG ====');
     console.log('SMTP_HOST =', host);
-    console.log('SMTP_PORT =', port);
+    console.log('SMTP_PORT =', portNumber);
+    console.log('SMTP_SECURE =', secure);
     console.log('SMTP_USER =', user);
     console.log('SMTP_PASS =', pass ? '***' : undefined);
     console.log('=====================');
 
+    // เตือนตั้งแต่ตอน boot ถ้าค่าที่ได้มาไม่ใช่อีเมล
+    // เคยมีเคสวาง placeholder ลงไปตรง ๆ แล้วไปรู้ตัวตอนส่งเมลไม่ออก
+    if (user && !user.includes('@')) {
+      console.error(
+        `SMTP_USER ไม่ใช่อีเมล ได้ค่ามาเป็น "${user}" กรุณาตั้งเป็นอีเมลที่ใช้ส่งจริง`,
+      );
+    }
+
     this.transporter = nodemailer.createTransport({
       host,
-      port: Number(port) || 587,
-      secure: false,
+      port: portNumber,
+      secure,
       auth: {
         user,
         pass,
       },
+      // ไม่ให้ค้างยาวเมื่อผู้ให้บริการบล็อกพอร์ตขาออก
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
     });
 
     // ทดสอบ connect ทันที (ช่วยบอกว่าปัญหาอยู่ที่ไหน)
     this.transporter.verify((error, success) => {
       if (error) {
         console.error('SMTP verify error:', error);
+        console.error(
+          'ส่งเมลยืนยันจะไม่ทำงานจนกว่าจะแก้ ตรวจ SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS',
+        );
       } else {
         console.log('SMTP server is ready to take messages');
       }
