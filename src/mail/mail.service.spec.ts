@@ -25,6 +25,105 @@ describe('MailService', () => {
     delete (global as any).fetch;
   });
 
+  describe('เมื่อมี BREVO_API_KEY', () => {
+    const base = {
+      BREVO_API_KEY: 'brevo-key',
+      FROM_EMAIL: 'noreply@example.com',
+    };
+
+    it('ไม่แตะ nodemailer เลย', () => {
+      new MailService(configWith(base));
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('ยิง HTTPS ไปที่ Brevo พร้อม key และเนื้อหา', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(configWith(base));
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, options] = fetchMock.mock.calls[0];
+
+      expect(url).toBe('https://api.brevo.com/v3/smtp/email');
+      expect(options.method).toBe('POST');
+      expect(options.headers['api-key']).toBe('brevo-key');
+
+      const body = JSON.parse(options.body);
+      expect(body.sender).toEqual({ email: 'noreply@example.com' });
+      expect(body.to).toEqual([{ email: 'student@mail.kmutt.ac.th' }]);
+      expect(body.htmlContent).toContain('https://x/y');
+    });
+
+    it('OTP ก็ไปทาง Brevo เหมือนกัน', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(configWith(base));
+      await service.sendResetOtpMail('student@mail.kmutt.ac.th', '123456');
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.htmlContent).toContain('123456');
+    });
+
+    it('Brevo ตอบไม่ ok แล้วโยน error พร้อมรายละเอียด', async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () => '{"message":"sender not valid"}',
+      });
+
+      const service = new MailService(configWith(base));
+      await expect(
+        service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y'),
+      ).rejects.toThrow('Brevo ตอบ 400: {"message":"sender not valid"}');
+    });
+
+    it('มาก่อน Resend เมื่อตั้งไว้ทั้งคู่', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({ ...base, RESEND_API_KEY: 'resend-key' }),
+      );
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        'https://api.brevo.com/v3/smtp/email',
+      );
+    });
+
+    it('ไม่มี FROM_EMAIL แล้วโยน error แทนที่จะยิงออกไป', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({ BREVO_API_KEY: 'brevo-key' }),
+      );
+      await expect(
+        service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y'),
+      ).rejects.toThrow('ใช้ Brevo ต้องตั้ง FROM_EMAIL');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('ถอยไปใช้ SMTP_USER เป็นผู้ส่งได้ถ้าไม่มี FROM_EMAIL', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      const service = new MailService(
+        configWith({
+          BREVO_API_KEY: 'brevo-key',
+          SMTP_USER: 'sender@example.com',
+        }),
+      );
+      await service.sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/y');
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.sender).toEqual({ email: 'sender@example.com' });
+    });
+  });
+
   describe('เมื่อมี RESEND_API_KEY', () => {
     const base = {
       RESEND_API_KEY: 'test-key',
