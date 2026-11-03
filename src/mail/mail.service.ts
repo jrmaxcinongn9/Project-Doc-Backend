@@ -17,7 +17,7 @@ export class MailService {
     console.log('SMTP_HOST =', host);
     console.log('SMTP_PORT =', port);
     console.log('SMTP_USER =', user);
-    console.log('SMTP_PASS =', pass);
+    console.log('SMTP_PASS =', pass ? '***' : undefined);
     console.log('=====================');
 
     this.transporter = nodemailer.createTransport({

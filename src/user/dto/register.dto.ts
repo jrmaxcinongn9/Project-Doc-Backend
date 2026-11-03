@@ -10,6 +10,7 @@ export class RegisterDTO {
 
   @IsEmail({}, { message: 'Please provide a valid email address' })
   @IsNotEmpty({ message: 'Email is required' })
+  @Matches(/@mail\.kmutt\.ac\.th$/i, { message: 'Email must end with @mail.kmutt.ac.th' })
   email: string;
 
   // @IsNotEmpty({ message: 'Password is required' })

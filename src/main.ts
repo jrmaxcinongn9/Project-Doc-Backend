@@ -12,8 +12,9 @@ async function bootstrap() {
     await NestFactory.create<NestExpressApplication>(
       AppModule,
       {
-        bufferLogs: false,
-        logger: false,
+        // buffer ไว้แล้วส่งต่อให้ winston
+        // ถ้าปิด logger ทิ้ง error ตอน boot จะหายไปทั้งหมด
+        bufferLogs: true,
       },
     );
 
