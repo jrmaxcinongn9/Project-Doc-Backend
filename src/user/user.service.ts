@@ -146,7 +146,8 @@ export class UserService {
   }
 
   // สร้าง token ยืนยันอีเมลแล้วส่งลิงก์ให้ผู้สมัคร
-  async sendVerifyMail(id: string): Promise<void> {
+  // คืนลิงก์กลับไปด้วย เผื่อผู้เรียกต้องใช้ตอนที่ส่งเมลออกไม่ได้
+  async sendVerifyMail(id: string): Promise<string> {
     const user = await this.userModel.findById(id).exec();
     if (!user) {
       throw new NotFoundException('User not found');
@@ -164,10 +165,31 @@ export class UserService {
       this.configService.get<string>('FRONTEND_URL') ||
       'http://localhost:8000';
 
-    await this.mailService.sendVerifyMail(
-      user.email,
-      `${base}/verify-email?token=${token}`,
-    );
+    const link = `${base}/verify-email?token=${token}`;
+
+    await this.mailService.sendVerifyMail(user.email, link);
+
+    return link;
+  }
+
+  // admin กดยืนยันอีเมลแทนผู้ใช้
+  // จำเป็นเมื่อเมลส่งไม่ถึง ซึ่งเกิดได้ทั้งจากผู้ให้บริการเมลและจากกล่องปลายทาง
+  // ผู้ใช้จึงไม่ควรถูกขังไว้นอกระบบเพราะเหตุที่เขาแก้เองไม่ได้
+  async markVerifiedByAdmin(
+    id: string,
+    adminEmail?: string,
+  ): Promise<UserDocument> {
+    const user = await this.userModel.findById(id).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    (user as any).isVerified = true;
+    (user as any).verifyToken = undefined;
+    (user as any).verifyTokenExpires = undefined;
+    (user as any).verifiedBy = adminEmail;
+
+    return user.save();
   }
 
   // ผู้ใช้กดลิงก์ในเมล
