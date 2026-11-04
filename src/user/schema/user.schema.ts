@@ -72,6 +72,10 @@ export class User {
   @Prop()
   approvedBy?: string;
 
+  // อีเมลของ admin ที่กดยืนยันอีเมลแทนผู้ใช้ ว่างไว้ถ้าผู้ใช้กดลิงก์เอง
+  @Prop()
+  verifiedBy?: string;
+
   @Prop()
   approvedAt?: Date;
 

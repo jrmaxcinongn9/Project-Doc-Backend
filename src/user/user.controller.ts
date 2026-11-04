@@ -13,6 +13,8 @@ import {
   Patch,
 } from '@nestjs/common';
 
+import { ConfigService } from '@nestjs/config';
+
 import { UserService } from './user.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AccountStatus, UserRole } from './schema/user.schema';
@@ -25,7 +27,10 @@ import { stdout } from 'process';
 
 @Controller('user')
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly configService: ConfigService,
+  ) {}
 
   // สมัคร user
   // สมัครแล้วยังเข้าใช้งานไม่ได้ ต้องยืนยันอีเมลและรอ admin อนุมัติก่อน
@@ -33,15 +38,24 @@ export class UserController {
   async register(@Body() body: RegisterDTO) {
     const created: any = await this.userService.create(body);
 
-    // ส่งเมลยืนยันแบบไม่ให้ล้มทั้งการสมัคร ถ้า SMTP ใช้ไม่ได้
+    // ส่งเมลยืนยันแบบไม่ให้ล้มทั้งการสมัคร ถ้าส่งเมลใช้ไม่ได้
+    let verifyLink: string | undefined;
     try {
-      await this.userService.sendVerifyMail(created._id?.toString?.() ?? created.id);
+      verifyLink = await this.userService.sendVerifyMail(
+        created._id?.toString?.() ?? created.id,
+      );
     } catch (err) {
       console.error('ส่งเมลยืนยันไม่สำเร็จ:', err);
     }
 
+    // ลิงก์ยืนยันคือกุญแจของบัญชีนั้น ปกติจึงไม่คืนออกมาทาง API
+    // เปิดได้เฉพาะตอนสาธิตหรือตอนที่การส่งเมลยังใช้ไม่ได้ โดยตั้ง env ไว้ชัดเจน
+    const exposeLink =
+      this.configService.get<string>('EXPOSE_VERIFY_LINK') === 'true';
+
     return {
       ...created,
+      ...(exposeLink && verifyLink ? { verifyLink } : {}),
       message:
         'สมัครสำเร็จ กรุณายืนยันอีเมลจากลิงก์ที่ส่งไป แล้วรอผู้ดูแลระบบอนุมัติ',
     };
@@ -60,6 +74,14 @@ export class UserController {
   @Get('pending')
   async findPending() {
     return this.userService.findPending();
+  }
+
+  // admin กดยืนยันอีเมลแทนผู้ใช้ ใช้เมื่อเมลส่งไม่ถึง
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/verify-email')
+  async verifyEmailByAdmin(@Param('id') id: string, @Request() req) {
+    return this.userService.markVerifiedByAdmin(id, req.user?.email);
   }
 
   // admin อนุมัติ
