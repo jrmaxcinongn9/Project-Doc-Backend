@@ -35,6 +35,8 @@ export class UserService {
   major?: string;
   student_id?: string;
   category?: string;
+  isVerified?: boolean;
+  status?: AccountStatus;
 }) {
     // ✅ check email ซ้ำ
     const emailExists = await this.userModel.findOne({
