@@ -146,7 +146,7 @@ export class UserService {
   }
 
   // สร้าง token ยืนยันอีเมลแล้วส่งลิงก์ให้ผู้สมัคร
-  // คืนลิงก์กลับไปด้วย เผื่อผู้เรียกต้องใช้ตอนที่ส่งเมลออกไม่ได้
+  // คืนลิงก์เสมอ แม้ส่งเมลไม่สำเร็จ เพราะกรณีที่ส่งไม่ได้คือกรณีที่ต้องใช้ลิงก์นี้
   async sendVerifyMail(id: string): Promise<string> {
     const user = await this.userModel.findById(id).exec();
     if (!user) {
@@ -167,7 +167,14 @@ export class UserService {
 
     const link = `${base}/verify-email?token=${token}`;
 
-    await this.mailService.sendVerifyMail(user.email, link);
+    // token ถูกบันทึกไปแล้ว ลิงก์จึงใช้ได้ไม่ว่าการส่งเมลจะสำเร็จหรือไม่
+    // ปล่อยให้ error ของเมลล้มทั้งฟังก์ชันจะทำให้ผู้เรียกไม่ได้ลิงก์ไปด้วย
+    // ซึ่งตัดทางออกทิ้งพอดีในสถานการณ์ที่ต้องการมันที่สุด
+    try {
+      await this.mailService.sendVerifyMail(user.email, link);
+    } catch (err) {
+      console.error('ส่งเมลยืนยันไม่สำเร็จ:', err);
+    }
 
     return link;
   }
