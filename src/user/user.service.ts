@@ -123,8 +123,20 @@ export class UserService {
 
   // รายชื่อที่รอ admin อนุมัติ
   async findPending(): Promise<UserDocument[]> {
+    // บัญชีที่สมัครไว้ก่อนมีฟิลด์ status ไม่มีคีย์นี้อยู่ในเอกสารเลย
+    // ด่าน login ถือว่าบัญชีพวกนั้นยังไม่ได้รับอนุมัติและปิดกั้นไว้
+    // ถ้ากรองแค่ status เท่ากับ PENDING บัญชีเหล่านั้นจะไม่โผล่มาให้ admin เห็น
+    // กลายเป็นเข้าระบบไม่ได้และไม่มีใครกดอนุมัติให้ได้เลย จึงต้องนับรวมมาด้วย
+    // ส่วน ADMIN ข้ามด่านอนุมัติอยู่แล้ว ไม่ต้องมารอในรายการนี้
     return this.userModel
-      .find({ status: AccountStatus.PENDING })
+      .find({
+        role: { $ne: UserRole.ADMIN },
+        $or: [
+          { status: AccountStatus.PENDING },
+          { status: { $exists: false } },
+          { status: null },
+        ],
+      })
       .select('-password')
       .exec();
   }

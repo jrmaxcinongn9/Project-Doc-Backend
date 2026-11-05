@@ -84,6 +84,20 @@ export class UserController {
     return this.userService.markVerifiedByAdmin(id, req.user?.email);
   }
 
+  // admin ขอลิงก์ยืนยันใหม่ของบัญชีใดก็ได้ ใช้เมื่อผู้ใช้ทำลิงก์หายหรือลิงก์หมดอายุ
+  // ลิงก์ใหม่ทับ token เดิมเสมอ ของเก่าจึงใช้ไม่ได้อีกหลังเรียกเส้นนี้
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Post(':id/resend-verify')
+  async resendVerify(@Param('id') id: string) {
+    const verifyLink = await this.userService.sendVerifyMail(id);
+
+    return {
+      verifyLink,
+      message: 'สร้างลิงก์ยืนยันใหม่แล้ว ส่งเมลไปด้วยถ้าระบบเมลใช้งานได้ ลิงก์เดิมใช้ไม่ได้อีก',
+    };
+  }
+
   // admin อนุมัติ
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
