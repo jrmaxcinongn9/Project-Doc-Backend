@@ -99,6 +99,15 @@ export class UserController {
     return this.userService.markVerifiedByAdmin(id, req.user?.email);
   }
 
+  // นักศึกษาที่อนุมัติแล้วแต่ไม่มีครูคนไหนถือสาขาเดียวกัน
+  // admin ใช้ดูว่าต้องหาครูเพิ่มสาขาไหน ไม่ให้มีใครตกหล่นจากการนิเทศ
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Get('without-teacher')
+  async findWithoutTeacher() {
+    return this.userService.findStudentsWithoutTeacher();
+  }
+
   // admin ขอลิงก์ยืนยันใหม่ของบัญชีใดก็ได้ ใช้เมื่อผู้ใช้ทำลิงก์หายหรือลิงก์หมดอายุ
   // ลิงก์ใหม่ทับ token เดิมเสมอ ของเก่าจึงใช้ไม่ได้อีกหลังเรียกเส้นนี้
   @UseGuards(JwtAuthGuard, RolesGuard)

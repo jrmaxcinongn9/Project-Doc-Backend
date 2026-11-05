@@ -37,4 +37,30 @@ export class TeacherService {
   async delete(id: string) {
     return this.userService.delete(id);
   }
+
+  // นักศึกษาที่ครูคนนี้ดูแล
+  //
+  // เดิมครูทุกคนเห็นนักศึกษาทุกคน ซึ่งไม่ตรงกับงานจริง
+  // ครูหนึ่งคนนิเทศสามสิบคนไม่ไหว การจับคู่จึงใช้ category ที่ตรงกัน
+  // นักศึกษาเลือกตามสถานประกอบการที่ไปฝึก ครูเลือกตามความเชี่ยวชาญ
+  async findMyStudents(email: string) {
+    const teacher = await this.findByEmail(email);
+
+    if (!teacher) {
+      throw new NotFoundException('ไม่พบบัญชีครูของผู้ใช้นี้');
+    }
+
+    const category = (teacher as any).category as string | undefined;
+    const students = await this.userService.findStudentsByCategory(category);
+
+    return {
+      category: category ?? null,
+      total: students.length,
+      // บอกให้ชัดว่าว่างเพราะยังไม่ได้ตั้งสาขา ไม่ใช่เพราะไม่มีนักศึกษา
+      message: category
+        ? undefined
+        : 'บัญชีครูนี้ยังไม่ได้ตั้งสาขาความเชี่ยวชาญ จึงยังไม่มีนักศึกษาที่จับคู่ได้ ให้ผู้ดูแลระบบตั้งค่าให้',
+      students,
+    };
+  }
 }

@@ -97,6 +97,50 @@ export class UserService {
     return this.userModel.find({ role }).exec();
   }
 
+  // จับคู่ครูกับนักศึกษาด้วย category ที่ตรงกัน
+  // นักศึกษาเลือกตามสถานประกอบการที่ไปฝึก ครูเลือกตามความเชี่ยวชาญ
+  //
+  // นับเฉพาะบัญชีที่อนุมัติแล้ว คนที่ยังรออนุมัติยังไม่ใช่นักศึกษาในระบบ
+  // ถ้านับมาด้วย ครูจะเห็นคนที่ admin ยังไม่รับเข้ามาปนอยู่ในห้องตัวเอง
+  async findStudentsByCategory(category?: string): Promise<UserDocument[]> {
+    // ครูที่ยังไม่มี category จับคู่กับใครไม่ได้
+    // ถ้าปล่อยผ่านไป ตัวกรองจะกลายเป็นหาคนที่ category ว่าง ซึ่งไม่ใช่ความหมายที่ต้องการ
+    if (!category) {
+      return [];
+    }
+
+    return this.userModel
+      .find({
+        role: UserRole.USER,
+        category,
+        status: AccountStatus.APPROVED,
+      })
+      .select('-password')
+      .exec();
+  }
+
+  // นักศึกษาที่อนุมัติแล้วแต่ไม่มีครูคนไหนถือ category เดียวกัน
+  // ใช้ให้ admin เห็นว่าต้องหาครูเพิ่มสาขาไหน ไม่ให้มีคนตกหล่น
+  async findStudentsWithoutTeacher(): Promise<UserDocument[]> {
+    const teachers = await this.findByRole(UserRole.TEACHER);
+    const covered = teachers
+      .map((t) => (t as any).category)
+      .filter((c): c is string => Boolean(c));
+
+    return this.userModel
+      .find({
+        role: UserRole.USER,
+        status: AccountStatus.APPROVED,
+        $or: [
+          { category: { $nin: covered } },
+          { category: { $exists: false } },
+          { category: null },
+        ],
+      })
+      .select('-password')
+      .exec();
+  }
+
   async updateUser(
     id: string,
     updates: Partial<User>,
