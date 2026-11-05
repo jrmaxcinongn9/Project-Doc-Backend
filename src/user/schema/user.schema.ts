@@ -122,3 +122,25 @@ UserSchema.pre<UserDocument>('save', async function (next) {
   this.password = await bcrypt.hash(this.password, 10);
   next();
 });
+//
+// ✅ ไม่ส่ง password ออกไปกับ response ใด ๆ
+//
+// GET /user ขอแค่ login ไม่ได้ดูบทบาท นักศึกษาคนไหนก็เรียกได้
+// และเดิมมันคืนเอกสารทั้งก้อนรวม password ที่ผ่าน bcrypt มาแล้วด้วย
+// นักศึกษาหนึ่งคนจึงดึง hash ของ admin และครูทุกคนออกไปได้
+// bcrypt ถอดกลับตรง ๆ ไม่ได้ แต่เอาไปไล่เดารหัสออฟไลน์ได้ไม่จำกัดครั้ง
+//
+// ตัดทิ้งที่ระดับ schema ครั้งเดียว ครอบคลุมทุกเส้นที่คืน user ออกไป
+// ดีกว่าไล่ใส่ select ทีละ query ซึ่งลืมได้ทุกครั้งที่เพิ่มเส้นใหม่
+//
+// การตรวจรหัสผ่านตอน login อ่านค่าจากตัว document ตรง ๆ ไม่ผ่านตรงนี้
+// จึงยังทำงานได้ตามเดิม
+const hidePassword = {
+  transform: (_doc: any, ret: any) => {
+    delete ret.password;
+    return ret;
+  },
+};
+
+UserSchema.set('toJSON', hidePassword);
+UserSchema.set('toObject', hidePassword);
