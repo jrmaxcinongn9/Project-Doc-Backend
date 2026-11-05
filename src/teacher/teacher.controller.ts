@@ -30,6 +30,14 @@ export class TeacherController {
     return this.teacherService.findByEmail(req.user.email);
   }
 
+  // นักศึกษาที่ครูคนนี้ดูแล จับคู่ด้วย category ที่ตรงกัน
+  // เดิมไม่มีเส้นนี้เลย ครูทุกคนจึงเห็นนักศึกษาทุกคนผ่าน GET /user
+  @UseGuards(JwtAuthGuard)
+  @Get('my-students')
+  async findMyStudents(@Request() req) {
+    return this.teacherService.findMyStudents(req.user.email);
+  }
+
   // รายชื่อครูเป็นข้อมูลภายใน ไม่ใช่ของสาธารณะ
   @UseGuards(JwtAuthGuard)
   @Get()
