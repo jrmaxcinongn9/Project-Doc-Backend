@@ -1,7 +1,7 @@
 // src/teacher/teacher.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { UserService } from '../user/user.service';
-import { UserRole } from '../user/schema/user.schema';
+import { AccountStatus, UserRole } from '../user/schema/user.schema';
 
 @Injectable()
 export class TeacherService {
@@ -15,12 +15,18 @@ export class TeacherService {
   }) {
     // เดิมเรียก create สองครั้ง ครั้งแรกสร้าง role USER ทิ้งไว้
     // ครั้งที่สองจึงชน email ซ้ำเสมอ สมัครครูไม่เคยสำเร็จ
+    // บัญชีครูสร้างโดย admin เท่านั้น การที่ admin กดสร้างคือการตรวจสอบแล้ว
+    // ถ้าปล่อยให้เกิดมาเป็นยังไม่ยืนยันอีเมลและรออนุมัติ ครูจะ login ไม่ได้เลย
+    // และไม่มีใครส่งลิงก์ยืนยันให้ด้วย เพราะระบบส่งเมลยังใช้งานไม่ได้
+    // กลายเป็นว่า admin สร้างบัญชีครูแล้วครูใช้ไม่ได้ ซึ่งไม่มีประโยชน์
     return this.userService.create({
       name: data.name,
       email: data.email,
       password: data.password,
       role: UserRole.TEACHER,
       category: data.category,
+      isVerified: true,
+      status: AccountStatus.APPROVED,
     });
   }
 
