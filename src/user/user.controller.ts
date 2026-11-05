@@ -1,8 +1,12 @@
 // src/user/user.controller.ts
+import * as bcrypt from 'bcrypt';
+
 import {
   Controller,
   Get,
+  HttpCode,
   Post,
+  UnauthorizedException,
   Body,
   UseGuards,
   Request,
@@ -20,6 +24,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { AccountStatus, UserRole } from './schema/user.schema';
 import { RegisterDTO } from './dto/register.dto';
+import { ResendVerifyDTO } from './dto/resend-verify.dto';
 
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -73,6 +78,45 @@ export class UserController {
       ...(exposeLink && verifyLink ? { verifyLink } : {}),
       message:
         'สมัครสำเร็จ กรุณายืนยันอีเมลจากลิงก์ที่ส่งไป แล้วรอผู้ดูแลระบบอนุมัติ',
+    };
+  }
+
+  // ผู้ใช้ขอลิงก์ยืนยันใหม่ด้วยตัวเอง
+  //
+  // ลิงก์ที่ได้ตอนสมัครโชว์รอบเดียว รีเฟรชหรือกดย้อนกลับแล้วหายถาวร
+  // เหลือทางเดียวคือรบกวน admin ให้กดให้ ซึ่งไม่ใช่ทางที่ควรเป็น
+  //
+  // เส้นนี้เปิดสาธารณะ แต่ต้องส่งรหัสผ่านมาถูกต้อง
+  // เพราะลิงก์ยืนยันคือกุญแจของบัญชีนั้น ถ้าขอด้วยอีเมลอย่างเดียว
+  // ใครก็ขอลิงก์ของคนอื่นแล้วยืนยันอีเมลแทนเจ้าตัวได้
+  //
+  // บัญชีที่ยืนยันไปแล้วไม่ออกลิงก์ใหม่ให้ กันการรีเซ็ตสถานะโดยไม่ตั้งใจ
+  @Post('resend-verify-mine')
+  @HttpCode(200)
+  async resendVerifyMine(@Body() body: ResendVerifyDTO) {
+    const user = await this.userService.findByEmail(body.email);
+
+    // ตอบเหมือนกันทุกกรณีที่ยืนยันตัวไม่ผ่าน
+    // ไม่บอกว่าอีเมลนี้มีบัญชีอยู่หรือไม่
+    if (!user || !(await bcrypt.compare(body.password, user.password))) {
+      throw new UnauthorizedException('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+    }
+
+    if (user.isVerified) {
+      return { alreadyVerified: true, message: 'บัญชีนี้ยืนยันอีเมลแล้ว' };
+    }
+
+    const verifyLink = await this.userService.sendVerifyMail(
+      (user as any)._id?.toString?.() ?? (user as any).id,
+    );
+
+    const exposeLink =
+      this.configService.get<string>('EXPOSE_VERIFY_LINK') === 'true';
+
+    return {
+      alreadyVerified: false,
+      ...(exposeLink ? { verifyLink } : {}),
+      message: 'สร้างลิงก์ยืนยันใหม่แล้ว ลิงก์เดิมใช้ไม่ได้อีก',
     };
   }
 
