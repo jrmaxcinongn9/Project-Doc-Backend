@@ -42,6 +42,8 @@ export class DocService {
       user_name: user.name,
       publish_date: dto.publish_date ? new Date(dto.publish_date) : null, // 📅 เพิ่มฟิลด์วันประกาศ (เผื่อใช้งาน)
       due_date: dto.due_date ? new Date(dto.due_date) : null,             // 📅 ตัวนี้บันทึกวันสิ้นสุดกำหนดส่ง
+      // คะแนนเต็มของงานชิ้นนี้ ครูกรอกตอนสร้าง แล้วค่อยให้คะแนนรายคนทีหลัง
+      max_score: dto.max_score ?? null,
       students,
     });
 
@@ -91,6 +93,7 @@ export class DocService {
         user_name: user.name,
         publish_date: dto.publish_date ? new Date(dto.publish_date) : null, // 📅 ยัดข้อมูลเพิ่มตรงนี้
         due_date: dto.due_date ? new Date(dto.due_date) : null,             // 📅 ยัดข้อมูลเพิ่มตรงนี้
+        max_score: dto.max_score ?? null,
         students,
       })),
     );
@@ -133,6 +136,107 @@ export class DocService {
     const updated = await this.docModel.findByIdAndUpdate(id, updateData, { new: true });
     if (!updated) throw new NotFoundException('Doc not found');
     return updated;
+  }
+
+  // ===================================================
+  // ✅ ครูให้คะแนนและเขียน feedback ของนักศึกษาหนึ่งคน
+  // ===================================================
+  //
+  // ฟิลด์ score, feedback, max_score มีอยู่ในฐานข้อมูลมานานแล้ว
+  // แต่ไม่มีเส้นไหนเขียนลงไปได้เลย ครูจึงให้คะแนนไม่ได้จริง
+  async gradeStudent(
+    docId: string,
+    studentId: string,
+    data: { score?: number | null; feedback?: string | null },
+    teacherEmail?: string,
+  ) {
+    const doc = await this.docModel.findById(docId);
+
+    if (!doc) {
+      throw new NotFoundException('ไม่พบงานชิ้นนี้');
+    }
+
+    const row = (doc.students ?? []).find(
+      (s: any) => String(s.student_id) === String(studentId),
+    );
+
+    if (!row) {
+      throw new NotFoundException('ไม่พบนักศึกษาคนนี้ในงานชิ้นนี้');
+    }
+
+    if (data.score !== undefined && data.score !== null) {
+      // คะแนนเกินคะแนนเต็มคือกรอกผิด ไม่ใช่ความตั้งใจ
+      // ปล่อยผ่านแล้วตัวเลขสรุปทั้งห้องจะเพี้ยนตามไปด้วย
+      const max = (doc as any).max_score;
+
+      if (max === null || max === undefined) {
+        throw new BadRequestException(
+          'งานชิ้นนี้ยังไม่ได้ตั้งคะแนนเต็ม ให้ตั้งก่อนจึงจะให้คะแนนได้',
+        );
+      }
+
+      if (data.score > max) {
+        throw new BadRequestException(
+          `คะแนนต้องไม่เกินคะแนนเต็มของงานชิ้นนี้ ซึ่งคือ ${max}`,
+        );
+      }
+
+      row.score = data.score;
+    }
+
+    if (data.score === null) {
+      row.score = null as any;
+    }
+
+    if (data.feedback !== undefined) {
+      row.feedback = data.feedback as any;
+    }
+
+    // บันทึกว่าใครให้และให้เมื่อไหร่ เฉพาะตอนที่มีการแก้จริง
+    if (data.score !== undefined || data.feedback !== undefined) {
+      row.feedback_by = teacherEmail as any;
+      row.feedback_at = new Date() as any;
+    }
+
+    doc.markModified('students');
+    await doc.save();
+
+    return {
+      assignment_name: (doc as any).assignment_name,
+      max_score: (doc as any).max_score ?? null,
+      student: row,
+    };
+  }
+
+  // ===================================================
+  // ✅ คะแนนและ feedback ของนักศึกษาคนที่ login
+  // ===================================================
+  //
+  // คืนเฉพาะแถวของตัวเอง ไม่ใช่ทั้งห้อง
+  // นักศึกษาไม่ควรเห็นคะแนนของเพื่อน
+  async findMyScores(studentId: string) {
+    const docs = await this.docModel
+      .find({ 'students.student_id': studentId })
+      .populate('classroom')
+      .exec();
+
+    return docs.map((doc: any) => {
+      const row = (doc.students ?? []).find(
+        (s: any) => String(s.student_id) === String(studentId),
+      );
+
+      return {
+        assignment_id: doc._id,
+        assignment_name: doc.assignment_name,
+        due_date: doc.due_date ?? null,
+        max_score: doc.max_score ?? null,
+        status: row?.status ?? 'PENDING',
+        score: row?.score ?? null,
+        feedback: row?.feedback ?? null,
+        feedback_by: row?.feedback_by ?? null,
+        feedback_at: row?.feedback_at ?? null,
+      };
+    });
   }
 
   // DELETE
