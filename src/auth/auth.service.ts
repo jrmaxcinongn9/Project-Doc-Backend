@@ -28,7 +28,10 @@ export class AuthService {
   private assertCanLogin(user: any): void {
     if (user.role === UserRole.ADMIN) return;
 
-    if (user.isVerified === false) {
+    // เทียบกับ false ตรงตัวจะปล่อยบัญชีเก่าที่ไม่มีฟิลด์นี้ผ่านไปได้
+    // เพราะค่าที่อ่านได้คือ undefined ซึ่งไม่เท่ากับ false
+    // บัญชีที่สมัครก่อนมีระบบยืนยันอีเมลจึงข้ามด่านนี้ไปทั้งหมด
+    if (!user.isVerified) {
       throw new ForbiddenException(
         'กรุณายืนยันอีเมลก่อนเข้าใช้งาน ตรวจสอบลิงก์ยืนยันในกล่องจดหมายของคุณ',
       );
