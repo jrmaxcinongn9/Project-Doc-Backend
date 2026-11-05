@@ -17,6 +17,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { UserService } from './user.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { AccountStatus, UserRole } from './schema/user.schema';
 import { RegisterDTO } from './dto/register.dto';
 
@@ -34,9 +35,23 @@ export class UserController {
 
   // สมัคร user
   // สมัครแล้วยังเข้าใช้งานไม่ได้ ต้องยืนยันอีเมลและรอ admin อนุมัติก่อน
+  //
+  // เส้นนี้เปิดให้ทุกคนเรียก เพราะนักศึกษาต้องสมัครเองได้
+  // แต่เดิมมันรับฟิลด์ role จาก body แล้วส่งต่อให้ฐานข้อมูลตรง ๆ
+  // ใครก็ได้จึงสมัครเป็น ADMIN ให้ตัวเองได้ และด่าน login ปล่อย ADMIN
+  // ผ่านทั้งการยืนยันอีเมลและการรออนุมัติ เท่ากับเปิดประตูหน้าบ้านทิ้งไว้
+  //
+  // role จาก body จึงนับเฉพาะตอนที่คนเรียกเป็น ADMIN ที่ login แล้วเท่านั้น
+  // ซึ่งคือตอนที่ admin เพิ่มบัญชีครูหรือบัญชีนักศึกษาจากหน้าจัดการผู้ใช้
+  @UseGuards(OptionalJwtAuthGuard)
   @Post('register')
-  async register(@Body() body: RegisterDTO) {
-    const created: any = await this.userService.create(body);
+  async register(@Body() body: RegisterDTO, @Request() req) {
+    const calledByAdmin = req.user?.role === UserRole.ADMIN;
+
+    const created: any = await this.userService.create({
+      ...body,
+      role: calledByAdmin ? body.role : UserRole.USER,
+    });
 
     // ส่งเมลยืนยันแบบไม่ให้ล้มทั้งการสมัคร ถ้าส่งเมลใช้ไม่ได้
     let verifyLink: string | undefined;

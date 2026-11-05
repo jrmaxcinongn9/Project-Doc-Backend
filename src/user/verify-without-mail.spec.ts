@@ -27,7 +27,7 @@ describe('ยืนยันอีเมลเมื่อส่งเมลไ�
     it('ไม่คืนลิงก์ออกมาเมื่อไม่ได้เปิดไว้', async () => {
       const controller = new UserController(userService, configWith({}));
 
-      const result: any = await controller.register({} as any);
+      const result: any = await controller.register({} as any, {} as any);
 
       expect(result.verifyLink).toBeUndefined();
     });
@@ -38,7 +38,7 @@ describe('ยืนยันอีเมลเมื่อส่งเมลไ�
         configWith({ EXPOSE_VERIFY_LINK: 'yes' }),
       );
 
-      const result: any = await controller.register({} as any);
+      const result: any = await controller.register({} as any, {} as any);
 
       expect(result.verifyLink).toBeUndefined();
     });
@@ -49,7 +49,7 @@ describe('ยืนยันอีเมลเมื่อส่งเมลไ�
         configWith({ EXPOSE_VERIFY_LINK: 'true' }),
       );
 
-      const result: any = await controller.register({} as any);
+      const result: any = await controller.register({} as any, {} as any);
 
       expect(result.verifyLink).toBe('https://app/verify-email?token=abc');
     });
@@ -62,7 +62,7 @@ describe('ยืนยันอีเมลเมื่อส่งเมลไ�
         configWith({ EXPOSE_VERIFY_LINK: 'true' }),
       );
 
-      const result: any = await controller.register({} as any);
+      const result: any = await controller.register({} as any, {} as any);
 
       expect(result.verifyLink).toBeUndefined();
       expect(result.message).toContain('สมัครสำเร็จ');
