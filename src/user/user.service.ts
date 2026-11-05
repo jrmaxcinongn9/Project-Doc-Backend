@@ -73,7 +73,19 @@ export class UserService {
     } catch (err: any) {
       // ✅ กัน Mongo duplicate index error (code 11000)
       if (err.code === 11000) {
-        throw new BadRequestException('Duplicate data detected');
+        // บอกให้ชัดว่าฟิลด์ไหนชน ข้อความเดิมคือ Duplicate data detected เฉย ๆ
+        // ซึ่งอ่านแล้วเดาสาเหตุไม่ถูกเลย และเสียเวลาไล่หานาน
+        const field = Object.keys(err.keyPattern ?? {})[0];
+
+        if (field === 'student_id') {
+          throw new BadRequestException(
+            'รหัสนักศึกษาซ้ำกับบัญชีอื่น ถ้าเป็นบัญชีครูหรือผู้ดูแลที่ไม่มีรหัสนักศึกษา แปลว่า index ของ student_id ในฐานข้อมูลยังไม่ใช่ sparse ให้รัน scripts/fix-student-id-index.js',
+          );
+        }
+
+        throw new BadRequestException(
+          field ? `ข้อมูลซ้ำที่ฟิลด์ ${field}` : 'Duplicate data detected',
+        );
       }
 
       throw err;
