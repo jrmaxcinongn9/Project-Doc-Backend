@@ -4,8 +4,14 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
 /**
- * ส่งเมลได้สามทาง เลือกตามค่า env ที่ตั้งไว้ ไล่ลำดับดังนี้
+ * ส่งเมลได้สี่ทาง เลือกตามค่า env ที่ตั้งไว้ ไล่ลำดับดังนี้
  *
+ * G. GMAIL_SCRIPT_URL คู่กับ GMAIL_SCRIPT_SECRET ส่งจาก Gmail ผ่าน Google Apps Script
+ *    ไม่ต้องมีโดเมน ไม่ต้องยืนยันเบอร์ ส่งได้ประมาณ 100 ฉบับต่อวันกับบัญชี Gmail ฟรี
+ *    ตัวสคริปต์อยู่ที่ scripts/gmail-relay.gs
+ * 0. BREVO_API_KEY ส่งผ่าน HTTPS API ของ Brevo (ชื่อเดิม Sendinblue)
+ *    ยืนยันแค่อีเมลผู้ส่ง (FROM_EMAIL) ในบัญชี Brevo ไม่ต้องมีโดเมน
+ *    ส่งหาผู้รับรายใดก็ได้ ฟรีวันละ 300 ฉบับ
  * 1. MAILJET_API_KEY คู่กับ MAILJET_SECRET_KEY ส่งผ่าน HTTPS API ของ Mailjet
  *    ยืนยันแค่อีเมลผู้ส่งรายตัว ไม่ต้องมีโดเมนของตัวเอง
  *    จึงส่งหาผู้รับรายใดก็ได้ตั้งแต่วันแรก
@@ -17,7 +23,7 @@ import * as nodemailer from 'nodemailer';
  * ที่บล็อกพอร์ต SMTP ขาออกทุกพอร์ต ทั้ง 587 และ 465 ต่อไม่ติดเหมือนกัน
  * ส่วนทางที่ 3 ยังสะดวกกว่าตอนพัฒนาบนเครื่องตัวเอง
  */
-type MailProvider = 'mailjet' | 'resend' | 'smtp';
+type MailProvider = 'gmail' | 'brevo' | 'mailjet' | 'resend' | 'smtp';
 
 @Injectable()
 export class MailService {
@@ -26,12 +32,42 @@ export class MailService {
   private readonly mailjetApiKey?: string;
   private readonly mailjetSecretKey?: string;
   private readonly resendApiKey?: string;
+  private readonly brevoApiKey?: string;
+  private readonly gmailScriptUrl?: string;
+  private readonly gmailScriptSecret?: string;
 
   constructor(private readonly configService: ConfigService) {
     this.mailjetApiKey = this.configService.get<string>('MAILJET_API_KEY');
     this.mailjetSecretKey =
       this.configService.get<string>('MAILJET_SECRET_KEY');
     this.resendApiKey = this.configService.get<string>('RESEND_API_KEY');
+    this.brevoApiKey = this.configService.get<string>('BREVO_API_KEY');
+    this.gmailScriptUrl = this.configService.get<string>('GMAIL_SCRIPT_URL');
+    this.gmailScriptSecret = this.configService.get<string>('GMAIL_SCRIPT_SECRET');
+
+    if (this.gmailScriptUrl && this.gmailScriptSecret) {
+      this.provider = 'gmail';
+      console.log('==== MAIL: Gmail ผ่าน Google Apps Script ====');
+      return;
+    }
+
+    if (this.gmailScriptUrl || this.gmailScriptSecret) {
+      console.error('Gmail ต้องมีทั้ง GMAIL_SCRIPT_URL และ GMAIL_SCRIPT_SECRET ตอนนี้มีไม่ครบ จึงข้ามไปใช้ทางอื่น');
+    }
+
+    if (this.brevoApiKey) {
+      this.provider = 'brevo';
+      const sender = this.configuredFrom();
+      console.log('==== MAIL: Brevo HTTPS API ====');
+      console.log('FROM_EMAIL =', sender);
+      console.log('===============================');
+      if (!sender) {
+        console.error(
+          'ยังไม่ได้ตั้ง FROM_EMAIL ส่งเมลผ่าน Brevo จะไม่ทำงาน ตั้งเป็นอีเมลผู้ส่งที่ยืนยันไว้ในบัญชี Brevo',
+        );
+      }
+      return;
+    }
 
     if (this.mailjetApiKey && this.mailjetSecretKey) {
       this.provider = 'mailjet';
@@ -111,7 +147,7 @@ export class MailService {
       if (error) {
         console.error('SMTP verify error:', error);
         console.error(
-          'ส่งเมลจะไม่ทำงานจนกว่าจะแก้ ถ้าโฮสต์บล็อกพอร์ต SMTP ให้ตั้ง MAILJET_API_KEY แทน',
+          'ส่งเมลจะไม่ทำงานจนกว่าจะแก้ ถ้าโฮสต์บล็อกพอร์ต SMTP ให้ตั้ง BREVO_API_KEY แทน',
         );
       } else {
         console.log('SMTP server is ready to take messages');
@@ -135,9 +171,9 @@ export class MailService {
 
     // Mailjet ไม่มีโดเมนกลางให้ยืม ผู้ส่งต้องเป็นอีเมลที่ยืนยันไว้ในบัญชีเท่านั้น
     // จึงปล่อยว่างไม่ได้ ต้องบอกให้ชัดตั้งแต่ตอนเรียกใช้
-    if (this.provider === 'mailjet') {
+    if (this.provider === 'mailjet' || this.provider === 'brevo') {
       throw new Error(
-        'ใช้ Mailjet ต้องตั้ง FROM_EMAIL เป็นอีเมลผู้ส่งที่ยืนยันไว้ในบัญชี Mailjet แล้ว',
+        `ใช้ ${this.provider === 'brevo' ? 'Brevo' : 'Mailjet'} ต้องตั้ง FROM_EMAIL เป็นอีเมลผู้ส่งที่ยืนยันไว้ในบัญชีแล้ว`,
       );
     }
 
@@ -147,6 +183,64 @@ export class MailService {
   }
 
   private async send(to: string, subject: string, html: string): Promise<void> {
+    if (this.provider === 'gmail') {
+      // Apps Script ตอบ POST ด้วย 302 ไปหน้าผลลัพธ์ fetch ตามไปให้เอง
+      const response = await fetch(this.gmailScriptUrl as string, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        redirect: 'follow',
+        body: JSON.stringify({
+          secret: this.gmailScriptSecret,
+          to,
+          subject,
+          html,
+          name: this.configService.get<string>('FROM_NAME') || 'Document Internship',
+        }),
+      });
+
+      const text = await response.text();
+      let result: { ok?: boolean; error?: string } = {};
+      try {
+        result = JSON.parse(text);
+      } catch {
+        // ได้หน้า HTML กลับมา มักเป็นเพราะ deploy สคริปต์ไม่ได้ตั้งให้ Anyone เข้าถึงได้
+      }
+
+      if (!response.ok || !result.ok) {
+        throw new Error(`Gmail script ไม่ได้ส่ง (${response.status}): ${result.error ?? text.slice(0, 200)}`);
+      }
+
+      return;
+    }
+
+    if (this.provider === 'brevo') {
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': this.brevoApiKey as string,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          sender: {
+            email: this.fromAddress(),
+            name: this.configService.get<string>('FROM_NAME') || 'Document Internship',
+          },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+        }),
+      });
+
+      if (!response.ok) {
+        // Brevo บอกสาเหตุตรง ๆ เช่น ผู้ส่งยังไม่ยืนยัน หรือ API key ผิด
+        const detail = await response.text();
+        throw new Error(`Brevo ตอบ ${response.status}: ${detail}`);
+      }
+
+      return;
+    }
+
     if (this.provider === 'mailjet') {
       const credentials = Buffer.from(
         `${this.mailjetApiKey}:${this.mailjetSecretKey}`,
@@ -214,7 +308,7 @@ export class MailService {
 
     if (!this.transporter) {
       throw new Error(
-        'ยังไม่ได้ตั้งค่าการส่งเมล ตั้ง MAILJET_API_KEY คู่กับ MAILJET_SECRET_KEY, RESEND_API_KEY หรือค่า SMTP_* อย่างใดอย่างหนึ่ง',
+        'ยังไม่ได้ตั้งค่าการส่งเมล ตั้ง GMAIL_SCRIPT_URL คู่กับ GMAIL_SCRIPT_SECRET, BREVO_API_KEY, MAILJET_API_KEY คู่กับ MAILJET_SECRET_KEY, RESEND_API_KEY หรือค่า SMTP_* อย่างใดอย่างหนึ่ง',
       );
     }
 
@@ -237,6 +331,20 @@ export class MailService {
       <h2>${otp}</h2>
       <p>รหัสนี้จะหมดอายุใน 10 นาที กรุณาอย่าเปิดเผยรหัสนี้ให้ผู้อื่นทราบ</p>
     `,
+    );
+  }
+
+  // admin อนุมัติแล้ว ส่งลิงก์เข้าสู่ระบบครั้งเดียวไปให้ กดแล้วเข้าระบบได้เลย
+  async sendApprovedMail(to: string, link: string) {
+    await this.send(
+      to,
+      'บัญชีของคุณได้รับการอนุมัติแล้ว',
+      `
+        <p>สวัสดีครับ</p>
+        <p>ผู้ดูแลระบบอนุมัติบัญชีของคุณแล้ว กดลิงก์ด้านล่างเพื่อเข้าสู่ระบบได้ทันที</p>
+        <p><a href="${link}">เข้าสู่ระบบ</a></p>
+        <p>ลิงก์นี้ใช้ได้ครั้งเดียวและหมดอายุใน 48 ชั่วโมง หลังจากนั้นเข้าสู่ระบบด้วยอีเมลและรหัสผ่านตามปกติ</p>
+      `,
     );
   }
 

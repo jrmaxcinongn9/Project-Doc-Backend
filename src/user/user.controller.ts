@@ -140,8 +140,16 @@ export class UserController {
   // ผู้ใช้กดลิงก์ยืนยันจากในเมล
   @Get('verify-email')
   async verifyEmail(@Query('token') token: string) {
-    await this.userService.verifyEmail(token);
-    return { message: 'ยืนยันอีเมลเรียบร้อย บัญชีอยู่ระหว่างรอผู้ดูแลระบบอนุมัติ' };
+    const { approved, loginToken } = await this.userService.verifyEmail(token);
+
+    // อนุมัติแล้ว คืนลิงก์เข้าระบบครั้งเดียว หน้าเว็บแลกเป็น session ให้ทันที
+    if (approved) {
+      return { message: 'ยืนยันอีเมลเรียบร้อย', login_token: loginToken };
+    }
+
+    return {
+      message: 'ยืนยันอีเมลเรียบร้อย บัญชีอยู่ระหว่างรอผู้ดูแลระบบอนุมัติ เมื่ออนุมัติแล้วจะได้รับอีเมลพร้อมลิงก์เข้าสู่ระบบ',
+    };
   }
 
   // รายชื่อที่รออนุมัติ

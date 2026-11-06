@@ -11,6 +11,7 @@ import {
   Get,
   Delete,
   Patch,
+  HttpCode,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDTO } from './dto/login.dto';
@@ -45,6 +46,29 @@ export class AuthController {
         major: req.user.major || '',
         academicYear: req.user.academicYear || '',
         student_id: req.user.student_id || null,
+      },
+    };
+  }
+
+  // ลิงก์เข้าสู่ระบบครั้งเดียว จากเมลแจ้งอนุมัติ หรือจากการยืนยันอีเมลของบัญชีที่อนุมัติแล้ว
+  // คืนรูปแบบเดียวกับ login ปกติ หน้าเว็บจึงตั้ง session ด้วยโค้ดชุดเดิมได้
+  @Post('magic')
+  @HttpCode(200)
+  async magic(@Body('token') token: string) {
+    const user: any = await this.userService.consumeLoginToken(String(token ?? ''));
+    const { access_token } = await this.authService.login(user);
+
+    return {
+      message: 'Login successful',
+      access_token,
+      user: {
+        id: user._id?.toString?.() ?? user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        major: user.major || '',
+        academicYear: user.academicYear || '',
+        student_id: user.student_id || null,
       },
     };
   }

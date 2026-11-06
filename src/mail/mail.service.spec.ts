@@ -25,6 +25,118 @@ describe('MailService', () => {
     delete (global as any).fetch;
   });
 
+  describe('เมื่อตั้ง Gmail ผ่าน Apps Script', () => {
+    const base = { GMAIL_SCRIPT_URL: 'https://script.google.com/macros/s/X/exec', GMAIL_SCRIPT_SECRET: 's3cret' };
+
+    it('ยิง POST ไปที่สคริปต์พร้อมรหัสลับ ผู้รับ และ HTML', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"ok":true,"remaining":99}' });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith(base)).sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/verify?t=1');
+
+      const [url, options] = fetchMock.mock.calls[0];
+      expect(url).toBe(base.GMAIL_SCRIPT_URL);
+      const body = JSON.parse(options.body);
+      expect(body).toMatchObject({ secret: 's3cret', to: 'student@mail.kmutt.ac.th' });
+      expect(body.html).toContain('https://x/verify?t=1');
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('สคริปต์ตอบ ok:false ต้องโยน error พร้อมเหตุผล', async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"ok":false,"error":"unauthorized"}' });
+
+      await expect(new MailService(configWith(base)).sendVerifyMail('a@b.c', 'l')).rejects.toThrow(/unauthorized/);
+    });
+
+    it('ได้หน้า HTML กลับมา (deploy ไม่ได้เปิดให้ Anyone) ถือว่าไม่ได้ส่ง', async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '<html>Sign in</html>' });
+
+      await expect(new MailService(configWith(base)).sendVerifyMail('a@b.c', 'l')).rejects.toThrow(/Gmail script/);
+    });
+
+    it('ส่งเมลแจ้งอนุมัติพร้อมลิงก์เข้าระบบ', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"ok":true}' });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith(base)).sendApprovedMail('a@b.c', 'https://web/login/magic?token=t');
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.subject).toContain('อนุมัติ');
+      expect(body.html).toContain('https://web/login/magic?token=t');
+    });
+
+    it('มาก่อน Brevo เมื่อตั้งไว้พร้อมกัน', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"ok":true}' });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith({ ...base, BREVO_API_KEY: 'k', FROM_EMAIL: 'x@y.z' })).sendVerifyMail('a@b.c', 'l');
+
+      expect(fetchMock.mock.calls[0][0]).toBe(base.GMAIL_SCRIPT_URL);
+    });
+  });
+
+  describe('เมื่อมี BREVO_API_KEY', () => {
+    const base = { BREVO_API_KEY: 'xkeysib-test', FROM_EMAIL: 'sender@gmail.com' };
+
+    it('ไม่แตะ nodemailer เลย', () => {
+      new MailService(configWith(base));
+      expect(createTransport).not.toHaveBeenCalled();
+    });
+
+    it('ยิง HTTPS ไปที่ Brevo พร้อม api-key ผู้ส่ง ผู้รับ และลิงก์ยืนยัน', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ messageId: 'm1' }) });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith(base)).sendVerifyMail('student@mail.kmutt.ac.th', 'https://x/verify?t=1');
+
+      const [url, options] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://api.brevo.com/v3/smtp/email');
+      expect(options.method).toBe('POST');
+      expect(options.headers['api-key']).toBe('xkeysib-test');
+
+      const body = JSON.parse(options.body);
+      expect(body.sender).toEqual({ email: 'sender@gmail.com', name: 'Document Internship' });
+      expect(body.to).toEqual([{ email: 'student@mail.kmutt.ac.th' }]);
+      expect(body.htmlContent).toContain('https://x/verify?t=1');
+    });
+
+    it('ตั้งชื่อผู้ส่งได้ด้วย FROM_NAME', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith({ ...base, FROM_NAME: 'ระบบฝึกงาน' })).sendResetOtpMail('a@mail.kmutt.ac.th', '123456');
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).sender.name).toBe('ระบบฝึกงาน');
+    });
+
+    it('Brevo ปฏิเสธ ต้องโยน error พร้อมเหตุผล', async () => {
+      (global as any).fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () => '{"code":"invalid_parameter","message":"sender not valid"}',
+      });
+
+      await expect(new MailService(configWith(base)).sendVerifyMail('a@b.c', 'l')).rejects.toThrow(/Brevo ตอบ 400: .*sender not valid/);
+    });
+
+    it('ไม่มี FROM_EMAIL ส่งไม่ได้ และบอกให้ตั้ง', async () => {
+      (global as any).fetch = jest.fn();
+
+      await expect(new MailService(configWith({ BREVO_API_KEY: 'k' })).sendVerifyMail('a@b.c', 'l')).rejects.toThrow(/FROM_EMAIL/);
+      expect((global as any).fetch).not.toHaveBeenCalled();
+    });
+
+    it('มาก่อน Mailjet และ Resend เมื่อตั้งไว้พร้อมกัน', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith({ ...base, MAILJET_API_KEY: 'a', MAILJET_SECRET_KEY: 'b', RESEND_API_KEY: 'r' }))
+        .sendVerifyMail('a@b.c', 'l');
+
+      expect(fetchMock.mock.calls[0][0]).toBe('https://api.brevo.com/v3/smtp/email');
+    });
+  });
+
   describe('เมื่อมีคู่กุญแจของ Mailjet', () => {
     const base = {
       MAILJET_API_KEY: 'mj-key',

@@ -298,11 +298,18 @@ export class UserService {
       throw new NotFoundException('User not found');
     }
 
+    const wasApproved = user.status === AccountStatus.APPROVED;
     user.status = status;
     (user as any).approvedBy = approvedBy;
     (user as any).approvedAt = new Date();
 
-    return user.save();
+    const saved = await user.save();
+
+    if (status === AccountStatus.APPROVED && !wasApproved) {
+      await this.sendApprovedLoginLink(saved);
+    }
+
+    return saved;
   }
 
   // สร้าง token ยืนยันอีเมลแล้วส่งลิงก์ให้ผู้สมัคร
@@ -351,16 +358,24 @@ export class UserService {
       throw new NotFoundException('User not found');
     }
 
+    const wasVerified = !!(user as any).isVerified;
     (user as any).isVerified = true;
     (user as any).verifyToken = undefined;
     (user as any).verifyTokenExpires = undefined;
     (user as any).verifiedBy = adminEmail;
 
-    return user.save();
+    const saved = await user.save();
+
+    // อนุมัติไปก่อนแล้วเพิ่งยืนยันอีเมลทีหลัง ส่งลิงก์เข้าระบบตอนนี้
+    if (!wasVerified) {
+      await this.sendApprovedLoginLink(saved);
+    }
+
+    return saved;
   }
 
   // ผู้ใช้กดลิงก์ในเมล
-  async verifyEmail(token: string): Promise<void> {
+  async verifyEmail(token: string): Promise<{ approved: boolean; loginToken: string | null }> {
     if (!token) {
       throw new BadRequestException('ไม่พบ token สำหรับยืนยันอีเมล');
     }
@@ -378,6 +393,78 @@ export class UserService {
     (user as any).isVerified = true;
     (user as any).verifyToken = undefined;
     (user as any).verifyTokenExpires = undefined;
+
+    // บัญชีที่อนุมัติแล้ว กดลิงก์ยืนยันแล้วเข้าระบบได้เลย
+    // บัญชีที่ยังรออนุมัติ จะได้ลิงก์เข้าระบบทางเมลตอน admin อนุมัติ
+    let loginToken: string | null = null;
+    if ((user as any).status === AccountStatus.APPROVED) {
+      loginToken = this.newLoginToken(user);
+    }
     await user.save();
+
+    return { approved: loginToken !== null, loginToken };
+  }
+
+  // ----------------------- ลิงก์เข้าสู่ระบบครั้งเดียว -----------------------
+  static readonly LOGIN_TOKEN_HOURS = 48;
+
+  private newLoginToken(user: UserDocument): string {
+    const token = randomBytes(32).toString('hex');
+    (user as any).loginToken = token;
+    (user as any).loginTokenExpires = new Date(Date.now() + UserService.LOGIN_TOKEN_HOURS * 3600 * 1000);
+    return token;
+  }
+
+  private frontendUrl(): string {
+    return (
+      this.configService.get<string>('FRONTEND_URL') || 'https://project-doc-fontend.vercel.app'
+    ).replace(/\/+$/, '');
+  }
+
+  /**
+   * แลกลิงก์เข้าสู่ระบบเป็นผู้ใช้ ใช้ได้ครั้งเดียว
+   * บัญชีต้องยืนยันอีเมลและได้รับอนุมัติแล้ว เงื่อนไขเดียวกับการ login ด้วยรหัสผ่าน
+   */
+  async consumeLoginToken(token: string): Promise<UserDocument> {
+    if (!token) throw new BadRequestException('ลิงก์เข้าสู่ระบบไม่ถูกต้อง');
+
+    const user = await this.userModel.findOne({ loginToken: token }).exec();
+    if (!user) throw new BadRequestException('ลิงก์เข้าสู่ระบบไม่ถูกต้องหรือถูกใช้ไปแล้ว');
+
+    const expires = (user as any).loginTokenExpires as Date | undefined;
+
+    // ใช้แล้วทิ้งทันที ไม่ว่าจะผ่านหรือไม่ผ่าน
+    (user as any).loginToken = undefined;
+    (user as any).loginTokenExpires = undefined;
+    await user.save();
+
+    if (!expires || expires.getTime() < Date.now()) {
+      throw new BadRequestException('ลิงก์เข้าสู่ระบบหมดอายุแล้ว กรุณาเข้าสู่ระบบด้วยอีเมลและรหัสผ่าน');
+    }
+    if (!(user as any).isVerified || (user as any).status !== AccountStatus.APPROVED) {
+      throw new BadRequestException('บัญชียังไม่พร้อมใช้งาน');
+    }
+
+    return user;
+  }
+
+  /**
+   * ส่งเมลแจ้งว่าอนุมัติแล้ว พร้อมลิงก์เข้าระบบครั้งเดียว
+   * ส่งเฉพาะบัญชีที่ยืนยันอีเมลแล้ว ถ้ายังไม่ยืนยัน จะได้เข้าระบบตอนกดลิงก์ยืนยันแทน
+   * ส่งไม่สำเร็จไม่ทำให้การอนุมัติล้ม
+   */
+  async sendApprovedLoginLink(user: UserDocument): Promise<string | null> {
+    if (!(user as any).isVerified || (user as any).status !== AccountStatus.APPROVED) return null;
+
+    const token = this.newLoginToken(user);
+    await user.save();
+
+    const link = `${this.frontendUrl()}/login/magic?token=${token}`;
+    try {
+      await this.mailService.sendApprovedMail(user.email, link);
+    } catch (err) {
+      console.error('ส่งเมลแจ้งอนุมัติไม่สำเร็จ:', (err as Error).message);
+    }
+    return link;
   }
 }

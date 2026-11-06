@@ -60,6 +60,13 @@ export class User {
   @Prop()
   verifyTokenExpires?: Date;
 
+  // ลิงก์เข้าสู่ระบบครั้งเดียว ส่งไปตอน admin อนุมัติ หรือคืนให้ตอนยืนยันอีเมลของบัญชีที่อนุมัติแล้ว
+  @Prop({ index: true })
+  loginToken?: string;
+
+  @Prop()
+  loginTokenExpires?: Date;
+
   // รออนุมัติจาก admin
   @Prop({
     type: String,
