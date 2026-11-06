@@ -114,6 +114,31 @@ export class DocService {
     return this.docModel.find({ user_id }).populate('classroom').exec();
   }
 
+  // ห้องที่ครูคนนี้สร้าง
+  async teacherRoomIds(teacherId: string) {
+    if (!Types.ObjectId.isValid(teacherId)) return [];
+    const rooms = await this.classroomModel
+      .find({ createdBy: new Types.ObjectId(teacherId) })
+      .select('_id')
+      .lean();
+    return rooms.map((r: any) => r._id);
+  }
+
+  // งานที่ครูคนนี้ดูแล: อยู่ในห้องของตัวเอง หรือตัวเองเป็นคนสร้าง
+  async findForTeacher(teacherId: string) {
+    const roomIds = await this.teacherRoomIds(teacherId);
+    return this.docModel
+      .find({ $or: [{ classroom: { $in: roomIds } }, { user_id: teacherId }] })
+      .populate('classroom')
+      .exec();
+  }
+
+  // id ของงานที่ครูคนนี้ดูแล ใช้กรองไฟล์
+  async teacherAssignmentIds(teacherId: string): Promise<string[]> {
+    const docs = await this.findForTeacher(teacherId);
+    return docs.map((d: any) => String(d._id));
+  }
+
   // DOC ทั้งหมด
   async findAll() {
     return this.docModel.find().populate('classroom').exec();
@@ -125,6 +150,13 @@ export class DocService {
   }
 
   // หา doc ตาม id
+  // ห้องของงาน ใช้ตรวจว่าครูเป็นเจ้าของห้องก่อนสร้างงาน
+  async findClassroom(id: string) {
+    const room = Types.ObjectId.isValid(id) ? await this.classroomModel.findById(id) : null;
+    if (!room) throw new NotFoundException('Classroom not found');
+    return room;
+  }
+
   async findOneById(id: string) {
     const doc = await this.docModel.findById(id).populate('classroom');
     if (!doc) throw new NotFoundException('Doc not found');
@@ -156,12 +188,38 @@ export class DocService {
       throw new NotFoundException('ไม่พบงานชิ้นนี้');
     }
 
-    const row = (doc.students ?? []).find(
+    let row: any = (doc.students ?? []).find(
       (s: any) => String(s.student_id) === String(studentId),
     );
 
+    // รายชื่อในงานถูกคัดลอกจากห้องเรียนครั้งเดียวตอนสร้างงาน
+    // นักศึกษาที่ถูกเพิ่มเข้าห้องทีหลังจึงไม่มีแถวในงานเก่า
+    // ถ้าคนนั้นอยู่ในห้องจริง ให้เพิ่มแถวให้ตอนนี้เลย ครูจะได้ให้คะแนนได้
     if (!row) {
-      throw new NotFoundException('ไม่พบนักศึกษาคนนี้ในงานชิ้นนี้');
+      const member = await this.findClassroomMember(
+        (doc as any).classroom,
+        studentId,
+      );
+
+      if (!member) {
+        throw new NotFoundException('ไม่พบนักศึกษาคนนี้ในงานชิ้นนี้');
+      }
+
+      if (!doc.students) {
+        (doc as any).students = [];
+      }
+
+      doc.students.push({
+        student_id: member._id ?? studentId,
+        name: member.name ?? null,
+        status: 'PENDING',
+        score: null,
+        feedback: null,
+      } as any);
+
+      // อ้างถึงตัวที่อยู่ในอาเรย์ ไม่ใช่ object ที่ส่งเข้าไป
+      // mongoose ห่อเป็น subdocument ใหม่ แก้ตัวเดิมจะไม่ถูกบันทึก
+      row = doc.students[doc.students.length - 1];
     }
 
     if (data.score !== undefined && data.score !== null) {
@@ -206,6 +264,30 @@ export class DocService {
       max_score: (doc as any).max_score ?? null,
       student: row,
     };
+  }
+
+  // หานักศึกษาในห้องเรียน คืน null ถ้าไม่ได้อยู่ในห้องนั้น
+  private async findClassroomMember(
+    classroomId: unknown,
+    studentId: string,
+  ): Promise<{ _id?: unknown; name?: string } | null> {
+    if (!classroomId) {
+      return null;
+    }
+
+    const classroom: any = await this.classroomModel
+      .findById(classroomId)
+      .populate('students', 'name');
+
+    const member = (classroom?.students ?? []).find(
+      (s: any) => String(s?._id ?? s) === String(studentId),
+    );
+
+    if (!member) {
+      return null;
+    }
+
+    return member._id ? member : { _id: member };
   }
 
   // ===================================================

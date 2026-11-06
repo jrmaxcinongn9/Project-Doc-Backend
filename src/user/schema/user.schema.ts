@@ -96,6 +96,10 @@ export class User {
   })
   major?: string;
 
+  // รูปโปรไฟล์ เก็บตัวรูปใน GridFS bucket avatars ที่นี่เก็บแค่ id
+  @Prop()
+  avatar_id?: string;
+
   // ⭐⭐⭐ สำคัญสุด
   @Prop({
     required: function (this: any) {

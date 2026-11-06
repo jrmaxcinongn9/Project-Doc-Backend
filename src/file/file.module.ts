@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FileController } from './file.controller';
 import { FileService } from './file.service';
+import { FileStorageService } from './file-storage.service';
 import { FileEntity, FileSchema } from './schema/file.schema';
 import { DocModule } from '../doc/doc.module';   // ✅ import DocModule
 
@@ -14,6 +15,6 @@ import { DocModule } from '../doc/doc.module';   // ✅ import DocModule
     DocModule,                                   // ✅ เพิ่มตรงนี้
   ],
   controllers: [FileController],
-  providers: [FileService],
+  providers: [FileService, FileStorageService],
 })
 export class FileModule {}

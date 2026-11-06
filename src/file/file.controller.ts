@@ -15,15 +15,17 @@ import {
   ForbiddenException,
   Query,
   Res,
-  NotFoundException,
 } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
+import { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import { FileService } from './file.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../user/schema/user.schema';
+import { assertOwnsAssignment, ownsAssignment, userIdOf } from '../shared/ownership';
+import { memoryStorage } from 'multer';
 import { Request, Response } from 'express';
-import * as fs from 'fs';
 import { Types } from 'mongoose';
 import { DocService } from '../doc/doc.service';
 import { UpdateFileDto } from './dto/update-file.dto';
@@ -54,42 +56,14 @@ export class FileController {
   @UseInterceptors(
     AnyFilesInterceptor({
       limits: { fileSize: 5 * 1024 * 1024 },
-      storage: diskStorage({
-        destination: (req: AuthedRequest, file, cb) => {
-          const studentId = (req.body as any)?.studentId;
-          const rawUser = req.user;
-          // แก้ไข: ดึงค่า ID ให้ครอบคลุมทุกโอกาส
-          const userId = rawUser?.userId || rawUser?.id || rawUser?._id || rawUser?.uid || 'unknown';
-          const folderOwner = studentId || userId;
-          const safeUser = String(folderOwner).replace(/[^a-zA-Z0-9]/g, '_');
-
-          const now = new Date();
-          const year = String(now.getFullYear());
-          const month = String(now.getMonth() + 1).padStart(2, '0');
-          const day = String(now.getDate()).padStart(2, '0');
-          const type = file.mimetype.split('/')[0];
-
-          // ใช้งาน path.join ข้ามแพลตฟอร์ม (Windows, Mac, Linux/Render)
-          const uploadPath = join(process.cwd(), 'uploads', safeUser, year, month, day, type);
-
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-
-          cb(null, uploadPath);
-        },
-        filename: (req: AuthedRequest, file, cb) => {
-          const studentId = (req.body as any)?.studentId;
-          const rawUser = req.user;
-          const fromUser = rawUser?.userId || rawUser?.id || rawUser?._id || rawUser?.uid || 'unknown';
-          const uploader = studentId || fromUser;
-          const ext = extname(file.originalname);
-          const timestamp = Date.now();
-          const random = Math.round(Math.random() * 1e9);
-          cb(null, `${uploader}-${timestamp}-${random}${ext}`);
-        },
-      }),
-    }),
+      // ค่าปริยายของ multer อ่านชื่อไฟล์เป็น latin1 ชื่อภาษาไทยจึงเพี้ยน
+      // เช่น รายงาน.pdf กลายเป็น à¸£à¸²... ทั้งในฐานข้อมูลและตอนดาวน์โหลด
+      defParamCharset: 'utf8',
+      // เก็บไว้ใน memory ก่อน แล้ว FileService เขียนลง GridFS
+      // ห้ามกลับไปใช้ diskStorage ดิสก์ของ Render ถูกล้างทุกครั้งที่ deploy
+      storage: memoryStorage(),
+      // type ของ Nest ยังไม่มี defParamCharset แต่ multer 2 รองรับแล้ว
+    } as MulterOptions & { defParamCharset: string }),
   )
   async uploadFiles(
     @UploadedFiles() files: Express.Multer.File[],
@@ -116,6 +90,17 @@ export class FileController {
 
     if (user.role === 'STUDENT' && !studentId) throw new BadRequestException('ต้องระบุ studentId');
 
+    // นักศึกษาส่งงานได้เฉพาะงานในห้องที่ตัวเองอยู่
+    // เดิมรู้ id ของงานห้องไหนก็ส่งไฟล์เข้าไปได้
+    if (user.role === 'USER') {
+      const room: any = (assignment as any).classroom;
+      const members: string[] = (room?.students ?? []).map((s: any) => String(s?._id ?? s));
+
+      if (!members.includes(String(currentUserId))) {
+        throw new ForbiddenException('คุณไม่ได้อยู่ในห้องเรียนของงานชิ้นนี้');
+      }
+    }
+
     const uploader = {
       userId: currentUserId, // ใช้ค่าที่ดึงมาใหม่
       email: user.email || null,
@@ -135,18 +120,25 @@ export class FileController {
     };
   }
   // ----------------------- List -----------------------
-  @UseGuards(JwtAuthGuard)
+  // ไฟล์ของทั้งระบบ เฉพาะครูและ admin นักศึกษาใช้ /files/my
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
   @Get()
-  async findAll() {
-    return this.fileService.findAll();
+  async findAll(@Req() req: AuthedRequest) {
+    // ครูเห็นเฉพาะไฟล์ในงานของห้องตัวเอง admin เห็นทั้งหมด
+    if (req.user?.role === 'ADMIN') return this.fileService.findAll();
+    const ids = await this.docService.teacherAssignmentIds(userIdOf(req.user as any) ?? '');
+    return this.fileService.findByAssignmentIds(ids);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('my')
   async findMyFiles(@Req() req: AuthedRequest) {
+    // JwtStrategy คืน id ไว้ที่ _id เดิมอ่าน userId ซึ่งไม่มี เส้นนี้จึงตอบ 400 เสมอ
     const user = req.user;
-    if (!user || !user.userId) throw new BadRequestException('ไม่พบ userId ใน token');
-    return this.fileService.findByUploaderId(user.userId);
+    const uid = user?.userId || user?._id || user?.id || user?.uid;
+    if (!uid) throw new BadRequestException('ไม่พบ userId ใน token');
+    return this.fileService.findByUploaderId(uid);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -155,6 +147,8 @@ export class FileController {
     const role = req.user?.role;
     if (role !== 'ADMIN' && role !== 'TEACHER') throw new ForbiddenException('อนุญาตเฉพาะ Admin และ Teacher');
     if (!Types.ObjectId.isValid(assignmentId)) throw new BadRequestException('รูปแบบ assignmentId ไม่ถูกต้อง');
+    // ครูดูได้เฉพาะงานในห้องของตัวเอง
+    assertOwnsAssignment(req.user as any, await this.docService.findOneById(assignmentId));
     return this.fileService.findByAssignmentId(assignmentId);
   }
 
@@ -164,7 +158,25 @@ export class FileController {
     const role = req.user?.role;
     if (role !== 'ADMIN' && role !== 'TEACHER') throw new ForbiddenException('อนุญาตเฉพาะ Admin และ Teacher');
     if (!Types.ObjectId.isValid(assignmentId)) throw new BadRequestException('รูปแบบ assignmentId ไม่ถูกต้อง');
+    // ครูดูได้เฉพาะงานในห้องของตัวเอง
+    assertOwnsAssignment(req.user as any, await this.docService.findOneById(assignmentId));
     return this.fileService.findSubmittersByAssignment(assignmentId);
+  }
+
+  // ครูเปิด แก้ หรือลบไฟล์ของนักศึกษาได้เฉพาะไฟล์ในงานของห้องตัวเอง
+  // เจ้าของไฟล์และ admin ทำได้ตามเดิม
+  private async assertCanAccessFile(id: string, user: AuthedRequest['user']) {
+    const file = await this.fileService.findOne(id);
+    const uid = userIdOf(user as any);
+
+    if (user?.role === 'ADMIN' || (uid && file.uploaded_by_id === uid)) return;
+
+    if (user?.role === 'TEACHER' && file.assignment_id && Types.ObjectId.isValid(file.assignment_id)) {
+      const assignment = await this.docService.findOneById(file.assignment_id).catch(() => null);
+      if (assignment && ownsAssignment(user as any, assignment)) return;
+    }
+
+    throw new ForbiddenException('ไฟล์นี้ไม่ได้อยู่ในงานของห้องเรียนคุณ');
   }
 
   // ----------------------- Update -----------------------
@@ -172,34 +184,14 @@ export class FileController {
   @Put(':id')
   async updateFile(@Param('id') id: string, @Body() dto: UpdateFileDto, @Req() req: AuthedRequest) {
     const user = req.user;
-    if (!user || !user.userId) throw new BadRequestException('ไม่พบ userId');
-    return this.fileService.update(id, dto, user.userId, user.role ?? 'STUDENT');
-  }
-
-  // ----------------------- Download Single -----------------------
-  @UseGuards(JwtAuthGuard)
-  @Get('download/:id')
-  async downloadFile(@Param('id') id: string, @Res() res: Response, @Req() req: AuthedRequest) {
-    const user = req.user;
-    const uid = user?.userId || user?._id || user?.id || user?.uid;
+    const uid = userIdOf(user as any);
     if (!uid) throw new BadRequestException('ไม่พบ userId');
-
-    const role = user?.role ?? 'USER';
-
-    const file = await this.fileService.findOne(id);
-    if (!file.file_path || !fs.existsSync(file.file_path))
-      throw new NotFoundException('ไฟล์ไม่พบหรือถูกลบไปแล้ว');
-
-    if (file.uploaded_by_id !== uid && role !== 'ADMIN' && role !== 'TEACHER') {
-      throw new ForbiddenException('ไม่มีสิทธิ์ดาวน์โหลดไฟล์นี้');
-    }
-
-    res.download(file.file_path, file.original_name || file.file_name, (err) => {
-      if (err) res.status(500).send('เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์');
-    });
+    await this.assertCanAccessFile(id, user);
+    return this.fileService.update(id, dto, uid, user?.role ?? 'STUDENT');
   }
 
   // ----------------------- Download ZIP -----------------------
+  // ต้องประกาศก่อน download/:id ไม่อย่างนั้น Nest อ่าน zip เป็น id ของไฟล์
   @UseGuards(JwtAuthGuard)
   @Get('download/zip')
   async downloadZip(@Query('ids') ids: string, @Res() res: Response, @Req() req: AuthedRequest) {
@@ -209,11 +201,35 @@ export class FileController {
 
     const role = user?.role ?? 'USER';
 
-    const idArray = ids.split(',').filter((id) => Types.ObjectId.isValid(id));
+    const idArray = String(ids ?? '').split(',').filter((id) => Types.ObjectId.isValid(id));
     if (idArray.length === 0) throw new BadRequestException('ไม่มีไฟล์ให้ดาวน์โหลด');
+
+    for (const fileId of idArray) {
+      await this.assertCanAccessFile(fileId, user);
+    }
 
     await this.fileService.downloadZip(idArray, uid, role, res);
   }
+
+  // ----------------------- Download Single -----------------------
+  @UseGuards(JwtAuthGuard)
+  @Get('download/:id')
+  async downloadFile(
+    @Param('id') id: string,
+    @Query('inline') inline: string,
+    @Res() res: Response,
+    @Req() req: AuthedRequest,
+  ) {
+    const user = req.user;
+    const uid = user?.userId || user?._id || user?.id || user?.uid;
+    if (!uid) throw new BadRequestException('ไม่พบ userId');
+
+    await this.assertCanAccessFile(id, user);
+
+    // ?inline=1 ให้ครูเปิดดูไฟล์ในเบราว์เซอร์ได้เลย ไม่ต้องดาวน์โหลดก่อน
+    await this.fileService.downloadFile(id, uid, user?.role ?? 'USER', res, inline === '1');
+  }
+
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
   async removeFile(@Param('id') id: string, @Req() req: AuthedRequest) {
@@ -231,6 +247,7 @@ export class FileController {
 
     const role = user?.role ?? 'USER';
 
+    await this.assertCanAccessFile(id, user);
     return this.fileService.remove(id, uid, role);
   }
 } 

@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../user/schema/user.schema';
+import { assertOwnsAssignment, assertOwnsRoom, userIdOf } from '../shared/ownership';
 import { DocService } from './doc.service';
 import { CreateDocDto } from './dto/create-doc.dto';
 import { GradeStudentDto } from './dto/grade-student.dto';
@@ -29,7 +30,9 @@ export class DocController {
   // ✅ CREATE ASSIGNMENT (ADMIN / TEACHER)
   // ===================================================
   @Post()
-  @UseGuards(JwtAuthGuard)
+  // เดิมนักศึกษาก็สร้างงานได้ เพราะเช็คแค่ว่า login
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
   async create(@Body() createDocDtos: CreateDocDto | CreateDocDto[], @Req() req) {
     const user = req.user;
     const userObj = {
@@ -39,6 +42,12 @@ export class DocController {
 
     // 💡 ข้อแนะนำเสริม: ตรวจสอบให้แน่ใจว่าไฟล์ src/doc/dto/create-doc.dto.ts 
     // มีการเพิ่มตัวแปร due_date?: string; และ publish_date?: string; ไว้แล้ว
+    // สร้างงานได้เฉพาะในห้องของตัวเอง
+    const dtos = Array.isArray(createDocDtos) ? createDocDtos : [createDocDtos];
+    for (const roomId of new Set(dtos.map((d) => String(d.classroom)))) {
+      assertOwnsRoom(user, await this.docService.findClassroom(roomId));
+    }
+
     if (Array.isArray(createDocDtos)) {
       return this.docService.createMultiple(createDocDtos, userObj);
     } else {
@@ -49,10 +58,16 @@ export class DocController {
   // ===================================================
   // ✅ GET ALL ASSIGNMENTS
   // ===================================================
-  @UseGuards(JwtAuthGuard)
+  // งานทุกชิ้นพร้อมคะแนนและ feedback ของนักศึกษาทุกคน
+  // เดิม login ก็พอ นักศึกษาจึงอ่านคะแนนของเพื่อนได้ทั้งหมด
+  // นักศึกษาใช้ /classroom/my และ /assignment/my-scores แทน
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
   @Get()
-  async findAll() {
-    return this.docService.findAll();
+  async findAll(@Req() req) {
+    // ครูเห็นเฉพาะงานในห้องของตัวเอง admin เห็นทั้งหมด
+    if (req.user?.role === 'ADMIN') return this.docService.findAll();
+    return this.docService.findForTeacher(userIdOf(req.user) ?? '');
   }
 
   // ===================================================
@@ -96,6 +111,8 @@ export class DocController {
     @Body() body: GradeStudentDto,
     @Request() req,
   ) {
+    // ให้คะแนนได้เฉพาะงานในห้องของตัวเอง
+    assertOwnsAssignment(req.user, await this.docService.findOneById(id));
     return this.docService.gradeStudent(id, studentId, body, req.user?.email);
   }
 
@@ -122,13 +139,12 @@ export class DocController {
 
     const assignment = await this.docService.findOneById(id);
 
-    if (
-      assignment.user_id !== userId &&
-      role !== 'ADMIN' &&
-      role !== 'TEACHER'
-    ) {
+    // เดิมครูทุกคนผ่านเงื่อนไขนี้ แก้งานของครูคนอื่นได้
+    // ตอนนี้ต้องเป็นเจ้าของห้องหรือคนสร้างงาน ไม่งั้นต้องเป็น admin
+    if (role !== 'ADMIN' && role !== 'TEACHER' && assignment.user_id !== userId) {
       throw new ForbiddenException('คุณไม่มีสิทธิ์แก้ไข assignment นี้');
     }
+    assertOwnsAssignment(user, assignment);
 
     // 🛠️ ประกอบโครงสร้างข้อมูลใหม่และทำการ Parse วันที่เป็น Date Object ก่อนยิงลงฐานข้อมูล MongoDB
     const updateData: any = {};
@@ -169,6 +185,7 @@ export class DocController {
     ) {
       throw new ForbiddenException('คุณไม่มีสิทธิ์ลบ assignment นี้');
     }
+    assertOwnsAssignment(user, assignment);
 
     return this.docService.delete(id);
   }

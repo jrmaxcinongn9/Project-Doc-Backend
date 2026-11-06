@@ -16,11 +16,7 @@ import { FileModule } from './file/file.module';
 import { DocModule } from './doc/doc.module';
 import { ClassroomModule } from './classroom/classroom.module';
 
-import { MulterModule } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
 
-import * as fs from 'fs';
-import * as path from 'path';
 
 // ✅ LOGGER
 import { LoggerModule } from './logger/logger.module';
@@ -81,40 +77,8 @@ import { RequestLoggerMiddleware } from './logger/request.middleware';
       },
     }),
 
-    // ⭐ FILE UPLOAD (รองรับทุกระบบปฏิบัติการทั้ง Windows, Mac, Linux/Render)
-    MulterModule.register({
-      storage: diskStorage({
-        destination: (req, file, callback) => {
-          const studentId =
-            req.body?.studentId || 'UNKNOWN';
-
-          const baseDir = path.join(process.cwd(), 'uploads');
-          const uploadDir = path.join(baseDir, studentId);
-
-          if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, {
-              recursive: true,
-            });
-          }
-
-          console.log(
-            '📁 [Multer] Save to:',
-            uploadDir,
-          );
-
-          callback(null, uploadDir);
-        },
-
-        filename: (req, file, callback) => {
-          console.log(
-            '📄 [Multer] Incoming:',
-            file.originalname,
-          );
-
-          callback(null, file.originalname);
-        },
-      }),
-    }),
+    // เดิมมี MulterModule แบบ diskStorage ตรงนี้ เขียนไฟล์ลงดิสก์ด้วยชื่อเดิมของผู้ใช้
+    // ไม่มีเส้นไหนใช้แล้ว ไฟล์ทั้งหมดไปที่ GridFS ผ่าน FileStorageService
 
     AuthModule,
     UserModule,

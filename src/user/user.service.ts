@@ -4,7 +4,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types, mongo } from 'mongoose';
+import { Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { MailService } from '../mail/mail.service';
@@ -93,6 +94,95 @@ export class UserService {
   }
 
   // ==========================
+  // ผู้ใช้ที่ครูคนนี้เห็นได้
+  //   ตัวเอง
+  //   นักศึกษาในห้องที่ตัวเองสร้าง
+  //   นักศึกษาที่จับคู่ด้วย category (หน้านักศึกษาของฉัน)
+  // ครูไม่เห็นนักศึกษาของห้องอื่น และไม่เห็นบัญชีครูหรือ admin คนอื่น
+  async findVisibleToTeacher(teacherId: string): Promise<UserDocument[]> {
+    if (!Types.ObjectId.isValid(teacherId)) return [];
+    const me = new Types.ObjectId(teacherId);
+
+    // อ่าน collection ห้องตรง ๆ เลี่ยงการพึ่งพา ClassroomModule ที่พึ่ง UserModule อยู่แล้ว
+    const rooms = await this.userModel.db
+      .collection('classrooms')
+      .find({ createdBy: me }, { projection: { students: 1 } })
+      .toArray();
+    const roomStudentIds = rooms.flatMap((r: any) => r.students ?? []);
+
+    const teacher: any = await this.userModel.findById(me).select('category').lean();
+    const or: any[] = [{ _id: me }, { _id: { $in: roomStudentIds } }];
+    if (teacher?.category) {
+      or.push({ role: UserRole.USER, status: AccountStatus.APPROVED, category: teacher.category });
+    }
+
+    return this.userModel.find({ $or: or }).exec();
+  }
+
+  // ----------------------- รูปโปรไฟล์ -----------------------
+  // เก็บใน GridFS เหมือนไฟล์งาน ดิสก์ของ Render ล้างทุกครั้งที่ deploy
+  static readonly AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+  static readonly AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+  private avatarBucket() {
+    return new mongo.GridFSBucket(this.userModel.db.db as any, { bucketName: 'avatars' });
+  }
+
+  async setAvatar(userId: string, file: { buffer: Buffer; mimetype: string; originalname?: string }) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new NotFoundException('User not found');
+
+    const upload = this.avatarBucket().openUploadStream(`avatar-${userId}`, {
+      metadata: { user_id: userId, mimetype: file.mimetype },
+    });
+    await new Promise<void>((resolve, reject) => {
+      Readable.from(file.buffer).pipe(upload).on('error', reject).on('finish', () => resolve());
+    });
+
+    const old = (user as any).avatar_id;
+    (user as any).avatar_id = String(upload.id);
+    await user.save();
+
+    // รูปเดิมไม่มีใครใช้แล้ว ลบทิ้ง ไม่ให้ค้างกินพื้นที่
+    if (old) await this.deleteAvatarFile(old);
+
+    return { avatar_id: String(upload.id) };
+  }
+
+  async getAvatar(userId: string): Promise<{ stream: Readable; mimetype: string } | null> {
+    const user: any = await this.userModel.findById(userId).select('avatar_id').lean();
+    const id = user?.avatar_id;
+    if (!id || !Types.ObjectId.isValid(id)) return null;
+
+    const [meta] = await this.avatarBucket().find({ _id: new Types.ObjectId(id) as any }).limit(1).toArray();
+    if (!meta) return null;
+
+    return {
+      stream: this.avatarBucket().openDownloadStream(new Types.ObjectId(id) as any),
+      mimetype: (meta.metadata as any)?.mimetype ?? 'image/png',
+    };
+  }
+
+  async removeAvatar(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new NotFoundException('User not found');
+
+    const old = (user as any).avatar_id;
+    (user as any).avatar_id = undefined;
+    await user.save();
+    if (old) await this.deleteAvatarFile(old);
+
+    return { message: 'ลบรูปโปรไฟล์แล้ว' };
+  }
+
+  private async deleteAvatarFile(id: string) {
+    try {
+      if (Types.ObjectId.isValid(id)) await this.avatarBucket().delete(new Types.ObjectId(id) as any);
+    } catch {
+      // ไม่มีไฟล์อยู่แล้ว ไม่ต้องทำอะไร
+    }
+  }
+
   async findAll(): Promise<UserDocument[]> {
     return this.userModel.find().exec();
   }

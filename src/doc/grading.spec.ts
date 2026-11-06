@@ -12,9 +12,11 @@ import { Classroom } from '../classroom/schemas/classroom.schema';
 describe('ให้คะแนนและ feedback', () => {
   let service: DocService;
   let doc: any;
+  let classroomStudents: any[];
 
   const buildDoc = (over: any = {}) => ({
     _id: 'doc1',
+    classroom: 'room1',
     assignment_name: 'รายงานสัปดาห์ที่ 1',
     max_score: 10,
     students: [
@@ -28,6 +30,18 @@ describe('ให้คะแนนและ feedback', () => {
 
   beforeEach(async () => {
     doc = buildDoc();
+    // stu3 อยู่ในห้อง แต่ถูกเพิ่มเข้ามาหลังจากสร้างงานแล้ว
+    classroomStudents = [
+      { _id: 'stu1', name: 'A' },
+      { _id: 'stu2', name: 'B' },
+      { _id: 'stu3', name: 'C' },
+    ];
+
+    const classroomModel = {
+      findById: jest.fn(() => ({
+        populate: jest.fn().mockResolvedValue({ _id: 'room1', students: classroomStudents }),
+      })),
+    };
 
     const docModel = {
       findById: jest.fn().mockResolvedValue(doc),
@@ -38,7 +52,7 @@ describe('ให้คะแนนและ feedback', () => {
       providers: [
         DocService,
         { provide: getModelToken(DocEntity.name), useValue: docModel },
-        { provide: getModelToken(Classroom.name), useValue: {} },
+        { provide: getModelToken(Classroom.name), useValue: classroomModel },
       ],
     }).compile();
 
@@ -107,6 +121,23 @@ describe('ให้คะแนนและ feedback', () => {
     await expect(
       service.gradeStudent('doc1', 'ไม่มีคนนี้', { score: 5 }, 'teacher@mail.kmutt.ac.th'),
     ).rejects.toThrow(NotFoundException);
+  });
+
+  it('นักศึกษาที่เข้าห้องหลังสร้างงาน ให้คะแนนได้ และถูกเพิ่มแถวในงาน', async () => {
+    await service.gradeStudent('doc1', 'stu3', { score: 9 }, 'teacher@mail.kmutt.ac.th');
+
+    expect(doc.students).toHaveLength(3);
+    expect(doc.students[2]).toMatchObject({ student_id: 'stu3', name: 'C', score: 9 });
+    expect(doc.save).toHaveBeenCalled();
+  });
+
+  it('คนที่ไม่ได้อยู่ในห้อง ไม่ถูกเพิ่มเข้างาน', async () => {
+    await expect(
+      service.gradeStudent('doc1', 'stu9', { score: 5 }, 'teacher@mail.kmutt.ac.th'),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(doc.students).toHaveLength(2);
+    expect(doc.save).not.toHaveBeenCalled();
   });
 
   it('ส่ง score เป็น null คือลบคะแนนเดิมทิ้ง', async () => {

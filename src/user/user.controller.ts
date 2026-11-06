@@ -14,8 +14,15 @@ import {
   Delete,
   Query,
   BadRequestException,
+  NotFoundException,
   Patch,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 
 import { ConfigService } from '@nestjs/config';
 
@@ -53,19 +60,28 @@ export class UserController {
   async register(@Body() body: RegisterDTO, @Request() req) {
     const calledByAdmin = req.user?.role === UserRole.ADMIN;
 
+    // admin ที่กดเพิ่มบัญชีเองคือคนตรวจสอบแล้ว ให้ใช้งานได้ทันที
+    // ไม่อย่างนั้นบัญชีจะค้างที่ยังไม่ยืนยันอีเมลและรออนุมัติ
+    // ทั้งที่ระบบส่งเมลยังใช้ไม่ได้ เหมือนบัญชีครูที่แก้ไปใน TeacherService
     const created: any = await this.userService.create({
       ...body,
       role: calledByAdmin ? body.role : UserRole.USER,
+      ...(calledByAdmin
+        ? { isVerified: true, status: AccountStatus.APPROVED }
+        : {}),
     });
 
     // ส่งเมลยืนยันแบบไม่ให้ล้มทั้งการสมัคร ถ้าส่งเมลใช้ไม่ได้
+    // บัญชีที่ admin สร้างยืนยันแล้ว ไม่ต้องส่งลิงก์
     let verifyLink: string | undefined;
-    try {
-      verifyLink = await this.userService.sendVerifyMail(
-        created._id?.toString?.() ?? created.id,
-      );
-    } catch (err) {
-      console.error('ส่งเมลยืนยันไม่สำเร็จ:', err);
+    if (!calledByAdmin) {
+      try {
+        verifyLink = await this.userService.sendVerifyMail(
+          created._id?.toString?.() ?? created.id,
+        );
+      } catch (err) {
+        console.error('ส่งเมลยืนยันไม่สำเร็จ:', err);
+      }
     }
 
     // ลิงก์ยืนยันคือกุญแจของบัญชีนั้น ปกติจึงไม่คืนออกมาทาง API
@@ -76,8 +92,9 @@ export class UserController {
     return {
       ...created,
       ...(exposeLink && verifyLink ? { verifyLink } : {}),
-      message:
-        'สมัครสำเร็จ กรุณายืนยันอีเมลจากลิงก์ที่ส่งไป แล้วรอผู้ดูแลระบบอนุมัติ',
+      message: calledByAdmin
+        ? 'เพิ่มบัญชีเรียบร้อย ใช้งานได้ทันที'
+        : 'สมัครสำเร็จ กรุณายืนยันอีเมลจากลิงก์ที่ส่งไป แล้วรอผู้ดูแลระบบอนุมัติ',
     };
   }
 
@@ -191,6 +208,43 @@ export class UserController {
   }
 
   // โปรไฟล์ตัวเอง
+  // ----------------------- รูปโปรไฟล์ของตัวเอง -----------------------
+  // ทุกบทบาทใช้ได้ เปลี่ยนได้เฉพาะรูปของตัวเอง
+  @UseGuards(JwtAuthGuard)
+  @Post('me/avatar')
+  @UseInterceptors(
+    FileInterceptor('avatar', {
+      storage: memoryStorage(),
+      limits: { fileSize: UserService.AVATAR_MAX_BYTES },
+      fileFilter: (_req, file, cb) =>
+        UserService.AVATAR_TYPES.includes(file.mimetype)
+          ? cb(null, true)
+          : cb(new BadRequestException('รูปโปรไฟล์ต้องเป็น PNG, JPG, WebP หรือ GIF'), false),
+    }),
+  )
+  async uploadAvatar(@UploadedFile() file: Express.Multer.File, @Request() req) {
+    if (!file) throw new BadRequestException('กรุณาเลือกรูป');
+    return this.userService.setAvatar(req.user._id, file);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('me/avatar')
+  async myAvatar(@Request() req, @Res() res: Response) {
+    const avatar = await this.userService.getAvatar(req.user._id);
+    if (!avatar) throw new NotFoundException('ยังไม่มีรูปโปรไฟล์');
+
+    res.setHeader('Content-Type', avatar.mimetype);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    avatar.stream.pipe(res);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('me/avatar')
+  async removeAvatar(@Request() req) {
+    return this.userService.removeAvatar(req.user._id);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   async getProfile(@Request() req) {
@@ -210,15 +264,22 @@ export class UserController {
     };
   }
 
-  // ดู user ทั้งหมด (login ก็พอ)
-  @UseGuards(JwtAuthGuard)
+  // ดู user ทั้งหมด
+  // เดิม login ก็พอ นักศึกษาคนไหนก็ดึงชื่อ อีเมล รหัสนักศึกษาของทุกคนได้
+  // หน้าที่เรียกเส้นนี้มีแต่ของครูและ admin หน้าของนักศึกษาไม่ใช้แล้ว
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
   @Get()
-  async findAll() {
-    return this.userService.findAll();
+  async findAll(@Request() req) {
+    // ครูเห็นเฉพาะตัวเองและนักศึกษาที่ตัวเองดูแล admin เห็นทั้งหมด
+    if (req.user?.role === UserRole.ADMIN) return this.userService.findAll();
+    return this.userService.findVisibleToTeacher(req.user?._id ?? req.user?.id);
   }
 
   // ดูตาม role
-  @UseGuards(JwtAuthGuard)
+  // ไม่มีหน้าไหนเรียกเส้นนี้ ให้ admin เท่านั้น
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Get('by-role')
   async getByRole(@Query('role') role: string) {
     if (!role) {

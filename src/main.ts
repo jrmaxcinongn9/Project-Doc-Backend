@@ -21,15 +21,9 @@ async function bootstrap() {
   // ✅ ใช้ winston เป็น logger หลัก
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
 
-  // static uploads (ข้ามแพลตฟอร์ม)
-  const uploadRoot = path.join(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadRoot)) {
-    fs.mkdirSync(uploadRoot, { recursive: true });
-  }
-
-  app.useStaticAssets(uploadRoot, {
-    prefix: '/uploads/',
-  });
+  // เดิมเปิดโฟลเดอร์ uploads เป็นไฟล์ static ใครรู้ path ก็โหลดงานนักศึกษาได้โดยไม่ต้อง login
+  // ตอนนี้ไฟล์อยู่ใน GridFS และดาวน์โหลดผ่าน /files/download/:id ที่ตรวจสิทธิ์แล้ว
+  // จึงไม่เปิดโฟลเดอร์นี้อีก
 
   // validation
   app.useGlobalPipes(

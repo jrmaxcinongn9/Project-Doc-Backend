@@ -8,10 +8,24 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { FileEntity, FileDocument } from './schema/file.schema';
-import * as fs from 'fs';
 import { extname } from 'path';
 import * as archiver from 'archiver';
+import { FileStorageService } from './file-storage.service';
 import { Response } from 'express';
+
+// ชนิดไฟล์ที่เปิดดูในเบราว์เซอร์ได้อย่างปลอดภัย ไม่มีสคริปต์
+export const PREVIEWABLE_TYPES = [
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'text/plain',
+];
+
+export function isPreviewable(mimetype?: string | null) {
+  return !!mimetype && PREVIEWABLE_TYPES.includes(mimetype.split(';')[0].trim().toLowerCase());
+}
 
 interface UploaderInfo {
   userId: string;
@@ -28,7 +42,15 @@ export class FileService {
   constructor(
     @InjectModel(FileEntity.name)
     private readonly fileModel: Model<FileDocument>,
+    private readonly storage: FileStorageService,
   ) {}
+
+  // ตั้งชื่อไฟล์ที่เก็บ ไม่ใช้ชื่อเดิมของผู้ใช้ตรง ๆ เพราะชนกันได้
+  private storedName(file: Express.Multer.File, uploader: UploaderInfo) {
+    const owner = String(uploader.studentId || uploader.userId).replace(/[^a-zA-Z0-9]/g, '_');
+    const random = Math.round(Math.random() * 1e9);
+    return `${owner}-${Date.now()}-${random}${extname(file.originalname)}`;
+  }
 
   // ----------------------- Create -----------------------
   async create(file: Express.Multer.File, uploader: UploaderInfo) {
@@ -42,12 +64,22 @@ export class FileService {
     const upload_day = String(now.getDate()).padStart(2, '0');
 
     const fileType = file.mimetype.split('/')[0];
+    const storedName = this.storedName(file, uploader);
+
+    // เก็บตัวไฟล์ลงฐานข้อมูล ไม่ใช่ดิสก์ของ Render ที่ล้างทุกครั้งที่ deploy
+    const gridfsId = await this.storage.save(file.buffer, storedName, {
+      original_name: file.originalname,
+      mimetype: file.mimetype,
+      uploaded_by_id: uploader.userId,
+      assignment_id: uploader.assignmentId || null,
+    });
 
     const doc = new this.fileModel({
-      file_id: file.filename,
-      file_name: file.filename,
+      file_id: storedName,
+      file_name: storedName,
       original_name: file.originalname,
-      file_path: file.path,
+      file_path: `gridfs:${gridfsId}`,
+      gridfs_id: gridfsId,
       file_type: fileType,
       mimetype: file.mimetype,
       file_size: file.size,
@@ -67,7 +99,13 @@ export class FileService {
       upload_day,
     });
 
-    return doc.save();
+    try {
+      return await doc.save();
+    } catch (err) {
+      // record บันทึกไม่ได้ ไม่อยากทิ้งไฟล์กำพร้าไว้ใน GridFS
+      await this.storage.remove({ gridfs_id: gridfsId });
+      throw err;
+    }
   }
 
   // ----------------------- Find -----------------------
@@ -83,6 +121,10 @@ export class FileService {
     const file = await this.fileModel.findById(id).exec();
     if (!file) throw new NotFoundException('ไม่พบไฟล์');
     return file;
+  }
+
+  async findByAssignmentIds(assignmentIds: string[]) {
+    return this.fileModel.find({ assignment_id: { $in: assignmentIds } }).sort({ createdAt: -1 }).exec();
   }
 
   async findByAssignmentId(assignmentId: string) {
@@ -135,14 +177,8 @@ export class FileService {
     throw new ForbiddenException('ไม่มีสิทธิ์ลบไฟล์นี้');
   }
 
-  // ลบไฟล์จากดิสก์
-  if (file.file_path && fs.existsSync(file.file_path)) {
-    try {
-      fs.unlinkSync(file.file_path);
-    } catch (err) {
-      console.error('ลบไฟล์ในดิสก์ไม่สำเร็จ:', err);
-    }
-  }
+  // ลบตัวไฟล์ ทั้งใน GridFS และไฟล์เก่าบนดิสก์
+  await this.storage.remove(file);
 
   // ลบ record ใน MongoDB
   await this.fileModel.deleteOne({ _id: id }).exec();
@@ -150,47 +186,66 @@ export class FileService {
 }
 
   // ----------------------- Download Single File -----------------------
-  async downloadFile(id: string, userId: string, role?: string, res?: Response) {
+  async downloadFile(
+    id: string,
+    userId: string,
+    role: string | undefined,
+    res: Response,
+    inline = false,
+  ) {
     const file = await this.findOne(id);
     if (file.uploaded_by_id !== userId && role !== 'ADMIN' && role !== 'TEACHER') {
       throw new ForbiddenException('ไม่มีสิทธิ์ดาวน์โหลดไฟล์นี้');
     }
 
-    if (!file.file_path || !fs.existsSync(file.file_path)) {
-      throw new NotFoundException('ไฟล์ไม่พบหรือถูกลบไปแล้ว');
-    }
+    const stream = await this.storage.open(file);
 
-    if (res) {
-      res.download(file.file_path, file.original_name || file.file_name, (err) => {
-        if (err) res.status(500).send('เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์');
-      });
-    } else {
-      return file.file_path;
+    // attachment ใส่ชื่อไฟล์ภาษาไทยแบบ RFC 5987 ให้เอง
+    res.attachment(file.original_name || file.file_name);
+    res.type(file.mimetype || 'application/octet-stream');
+
+    // เปิดดูในเบราว์เซอร์ได้เฉพาะชนิดที่ไม่มีสคริปต์ฝังอยู่
+    // HTML หรือ SVG ที่นักศึกษาอัปโหลดมา ถ้าเปิดแบบ inline จะรันสคริปต์บนโดเมนของเว็บได้
+    // ชนิดอื่นยังดาวน์โหลดเหมือนเดิม
+    if (inline && isPreviewable(file.mimetype)) {
+      const header = String(res.getHeader('Content-Disposition') ?? '');
+      res.setHeader('Content-Disposition', header.replace(/^attachment/, 'inline'));
     }
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    stream.on('error', () => {
+      if (!res.headersSent) res.status(500).send('เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์');
+      else res.end();
+    });
+    stream.pipe(res);
   }
 
   // ----------------------- Download Multiple Files as ZIP -----------------------
   async downloadZip(ids: string[], userId: string, role: string, res: Response) {
     const files = await Promise.all(ids.map(id => this.findOne(id)));
-    const existingFiles = files.filter(f => f.file_path && fs.existsSync(f.file_path));
-    if (existingFiles.length === 0) throw new NotFoundException('ไม่พบไฟล์ที่สามารถดาวน์โหลดได้');
 
-    for (const file of existingFiles) {
+    for (const file of files) {
       if (file.uploaded_by_id !== userId && role !== 'ADMIN' && role !== 'TEACHER') {
         throw new ForbiddenException('ไม่มีสิทธิ์ดาวน์โหลดไฟล์บางไฟล์ในรายการ');
       }
     }
 
+    const available: FileDocument[] = [];
+    for (const file of files) {
+      if (await this.storage.exists(file)) available.push(file);
+    }
+    if (available.length === 0) throw new NotFoundException('ไม่พบไฟล์ที่สามารถดาวน์โหลดได้');
+
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename=files.zip');
 
     const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.on('error', err => res.status(500).send('เกิดข้อผิดพลาดในการสร้าง ZIP'));
+    archive.on('error', () => res.status(500).send('เกิดข้อผิดพลาดในการสร้าง ZIP'));
     archive.pipe(res);
 
-    existingFiles.forEach(file => {
-      archive.append(fs.createReadStream(file.file_path), { name: file.original_name || file.file_name });
-    });
+    for (const file of available) {
+      archive.append(await this.storage.open(file), { name: file.original_name || file.file_name });
+    }
 
     await archive.finalize();
   }

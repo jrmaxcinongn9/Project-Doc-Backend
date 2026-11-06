@@ -1,3 +1,4 @@
+import { jwtSecret } from './jwt-secret';
 import { Module } from '@nestjs/common';
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
@@ -25,7 +26,7 @@ import { MailModule } from '../mail/mail.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'yourSecretKeyHere',
+        secret: jwtSecret(configService),
         signOptions: {
           // ใช้ค่าจาก .env แทน process.env ตรง ๆ
           expiresIn:

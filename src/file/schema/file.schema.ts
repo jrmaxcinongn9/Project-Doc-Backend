@@ -18,8 +18,14 @@ export class FileEntity {
   @Prop({ required: true })
   original_name: string;
 
+  // ไฟล์เก่าเป็น path บนดิสก์ ไฟล์ใหม่เป็น gridfs:<id> ไว้ดูเฉย ๆ
+  // ตัวที่ใช้อ่านไฟล์จริงคือ gridfs_id
   @Prop({ required: true })
   file_path: string;
+
+  // id ของไฟล์ใน GridFS bucket uploads ว่างไว้คือไฟล์เก่าที่อยู่บนดิสก์
+  @Prop({ index: true })
+  gridfs_id?: string;
 
   @Prop({ required: true })
   file_type: string;
