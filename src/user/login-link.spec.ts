@@ -38,7 +38,7 @@ describe('ยืนยันอีเมลแล้วเข้าระบบ'
     const user = makeUser();
     const { service } = serviceWith(user);
 
-    expect(await service.verifyEmail('v1')).toEqual({ approved: false, loginToken: null });
+    expect(await service.verifyEmail('v1')).toMatchObject({ approved: false, loginToken: null, already: false });
     expect(user.isVerified).toBe(true);
     expect(user.loginToken).toBeUndefined();
   });
@@ -105,6 +105,69 @@ describe('ยืนยันอีเมลแล้วเข้าระบบ'
     await service.markVerifiedByAdmin('u1', 'admin@x');
 
     expect(mail.sendApprovedMail).toHaveBeenCalled();
+  });
+});
+
+describe('ลิงก์ยืนยันในเมลใช้ได้ทุกฉบับ', () => {
+  beforeEach(() => jest.spyOn(console, 'error').mockImplementation(() => undefined));
+  afterEach(() => jest.restoreAllMocks());
+
+  function withMail(user: any) {
+    const { service, mail } = serviceWith(user);
+    (mail as any).sendVerifyMail = jest.fn().mockResolvedValue(undefined);
+    return { service, mail: mail as any };
+  }
+
+  it('ส่งลิงก์ซ้ำ ใช้รหัสเดิมที่ยังไม่หมดอายุ', async () => {
+    const user = makeUser({ verifyToken: 'v1', verifyTokenExpires: new Date(Date.now() + 20 * 3600_000) });
+    const { service } = withMail(user);
+
+    const link = await service.sendVerifyMail('u1');
+
+    expect(link).toMatch(/token=v1$/);
+    expect(user.verifyToken).toBe('v1');
+  });
+
+  it('รหัสเดิมใกล้หมดอายุ สร้างรหัสใหม่', async () => {
+    const user = makeUser({ verifyToken: 'v1', verifyTokenExpires: new Date(Date.now() + 10 * 60_000) });
+    const { service } = withMail(user);
+
+    await service.sendVerifyMail('u1');
+
+    expect(user.verifyToken).not.toBe('v1');
+    expect(user.verifyToken).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('กดลิงก์ที่ยืนยันไปแล้วซ้ำ บอกว่ายืนยันแล้ว ไม่ใช่ผิดพลาด', async () => {
+    const verified = makeUser({ isVerified: true, verifyToken: undefined, usedVerifyToken: 'v1' });
+    const model: any = {
+      findOne: jest.fn((q: any) => ({ exec: async () => (q.usedVerifyToken === 'v1' ? verified : null) })),
+    };
+    const service = new UserService(model, {} as any, { get: () => undefined } as any);
+
+    await expect(service.verifyEmail('v1')).resolves.toMatchObject({ already: true, loginToken: null });
+  });
+
+  it('กดลิงก์ซ้ำ ไม่ได้ลิงก์เข้าระบบเพิ่ม', async () => {
+    const verified = makeUser({ isVerified: true, status: AccountStatus.APPROVED, usedVerifyToken: 'v1' });
+    const model: any = {
+      findOne: jest.fn((q: any) => ({ exec: async () => (q.usedVerifyToken ? verified : null) })),
+    };
+    const service = new UserService(model, {} as any, { get: () => undefined } as any);
+
+    const r = await service.verifyEmail('v1');
+
+    expect(r.loginToken).toBeNull();
+    expect(verified.loginToken).toBeUndefined();
+  });
+
+  it('ยืนยันแล้วจำรหัสที่ใช้ไว้', async () => {
+    const user = makeUser();
+    const { service } = serviceWith(user);
+
+    await service.verifyEmail('v1');
+
+    expect(user.usedVerifyToken).toBe('v1');
   });
 });
 

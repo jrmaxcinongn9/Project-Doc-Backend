@@ -39,12 +39,13 @@ describe('POST :id/resend-verify', () => {
     expect(result.verifyLink).toBe('link');
   });
 
-  it('มีข้อความบอกว่าลิงก์เดิมใช้ไม่ได้อีก', async () => {
+  // ส่งซ้ำใช้รหัสเดิม ลิงก์ในเมลฉบับก่อนจึงยังใช้ได้
+  it('บอกว่าลิงก์ในเมลฉบับก่อนยังใช้ได้', async () => {
     const controller = buildController(jest.fn().mockResolvedValue('link'));
 
     const result: any = await controller.resendVerify('user-1');
 
-    expect(result.message).toMatch(/ลิงก์เดิมใช้ไม่ได้อีก/);
+    expect(result.message).toMatch(/ลิงก์ในเมลฉบับก่อนยังใช้ได้/);
   });
 
   it('บัญชีไม่มีอยู่ ปล่อย error ของ service ขึ้นไปตามเดิม', async () => {

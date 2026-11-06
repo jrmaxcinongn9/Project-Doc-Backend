@@ -133,14 +133,22 @@ export class UserController {
     return {
       alreadyVerified: false,
       ...(exposeLink ? { verifyLink } : {}),
-      message: 'สร้างลิงก์ยืนยันใหม่แล้ว ลิงก์เดิมใช้ไม่ได้อีก',
+      message: 'ส่งลิงก์ยืนยันอีกครั้งแล้ว ลิงก์ในเมลฉบับก่อนยังใช้ได้',
     };
   }
 
   // ผู้ใช้กดลิงก์ยืนยันจากในเมล
   @Get('verify-email')
   async verifyEmail(@Query('token') token: string) {
-    const { approved, loginToken } = await this.userService.verifyEmail(token);
+    const { approved, loginToken, already, status } = await this.userService.verifyEmail(token);
+
+    if (already) {
+      return {
+        message: status === AccountStatus.APPROVED
+          ? 'อีเมลนี้ยืนยันไปแล้ว เข้าสู่ระบบด้วยอีเมลและรหัสผ่านได้เลย'
+          : 'อีเมลนี้ยืนยันไปแล้ว บัญชีอยู่ระหว่างรอผู้ดูแลระบบอนุมัติ เมื่ออนุมัติแล้วจะได้รับอีเมลพร้อมลิงก์เข้าสู่ระบบ',
+      };
+    }
 
     // อนุมัติแล้ว คืนลิงก์เข้าระบบครั้งเดียว หน้าเว็บแลกเป็น session ให้ทันที
     if (approved) {
@@ -187,7 +195,7 @@ export class UserController {
 
     return {
       verifyLink,
-      message: 'สร้างลิงก์ยืนยันใหม่แล้ว ส่งเมลไปด้วยถ้าระบบเมลใช้งานได้ ลิงก์เดิมใช้ไม่ได้อีก',
+      message: 'ส่งลิงก์ยืนยันอีกครั้งแล้ว ลิงก์ในเมลฉบับก่อนยังใช้ได้',
     };
   }
 

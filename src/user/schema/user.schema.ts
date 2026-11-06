@@ -60,6 +60,10 @@ export class User {
   @Prop()
   verifyTokenExpires?: Date;
 
+  // รหัสยืนยันที่ใช้ไปแล้ว ใช้แยกกรณีกดลิงก์ซ้ำ ออกจากลิงก์ที่ไม่ถูกต้องจริง
+  @Prop({ index: true })
+  usedVerifyToken?: string;
+
   // ลิงก์เข้าสู่ระบบครั้งเดียว ส่งไปตอน admin อนุมัติ หรือคืนให้ตอนยืนยันอีเมลของบัญชีที่อนุมัติแล้ว
   @Prop({ index: true })
   loginToken?: string;

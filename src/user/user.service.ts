@@ -320,13 +320,21 @@ export class UserService {
       throw new NotFoundException('User not found');
     }
 
-    const token = randomBytes(32).toString('hex');
-    const expires = new Date();
-    expires.setHours(expires.getHours() + 24);
+    // ใช้รหัสเดิมถ้ายังไม่หมดอายุ ลิงก์ในเมลทุกฉบับที่ส่งไปแล้วจึงใช้ได้เหมือนกัน
+    // เดิมสร้างรหัสใหม่ทุกครั้ง รวมถึงตอนกด Login ด้วยบัญชีที่ยังไม่ยืนยัน
+    // ผู้ใช้กดลิงก์ในเมลฉบับแรกแล้วเจอว่าลิงก์ไม่ถูกต้อง ทั้งที่เพิ่งได้รับเมล
+    const current = (user as any).verifyToken as string | undefined;
+    const currentExpires = (user as any).verifyTokenExpires as Date | undefined;
+    const stillValid = !!current && !!currentExpires && currentExpires.getTime() > Date.now() + 60 * 60 * 1000;
 
-    (user as any).verifyToken = token;
-    (user as any).verifyTokenExpires = expires;
-    await user.save();
+    const token = stillValid ? (current as string) : randomBytes(32).toString('hex');
+    if (!stillValid) {
+      const expires = new Date();
+      expires.setHours(expires.getHours() + 24);
+      (user as any).verifyToken = token;
+      (user as any).verifyTokenExpires = expires;
+      await user.save();
+    }
 
     const base =
       this.configService.get<string>('FRONTEND_URL') ||
@@ -375,14 +383,19 @@ export class UserService {
   }
 
   // ผู้ใช้กดลิงก์ในเมล
-  async verifyEmail(token: string): Promise<{ approved: boolean; loginToken: string | null }> {
+  async verifyEmail(token: string): Promise<{ approved: boolean; loginToken: string | null; already: boolean; status?: string }> {
     if (!token) {
       throw new BadRequestException('ไม่พบ token สำหรับยืนยันอีเมล');
     }
 
     const user = await this.userModel.findOne({ verifyToken: token }).exec();
     if (!user) {
-      throw new BadRequestException('ลิงก์ยืนยันไม่ถูกต้องหรือถูกใช้ไปแล้ว');
+      // กดลิงก์ที่ยืนยันไปแล้วซ้ำ ไม่ใช่ความผิดพลาด บอกให้ชัดว่ายืนยันแล้ว
+      const done: any = await this.userModel.findOne({ usedVerifyToken: token }).exec();
+      if (done?.isVerified) {
+        return { approved: false, loginToken: null, already: true, status: done.status };
+      }
+      throw new BadRequestException('ลิงก์ยืนยันไม่ถูกต้องหรือหมดอายุแล้ว กรุณาเข้าสู่ระบบเพื่อขอลิงก์ใหม่');
     }
 
     const expires = (user as any).verifyTokenExpires as Date | undefined;
@@ -391,6 +404,7 @@ export class UserService {
     }
 
     (user as any).isVerified = true;
+    (user as any).usedVerifyToken = token;
     (user as any).verifyToken = undefined;
     (user as any).verifyTokenExpires = undefined;
 
@@ -402,7 +416,7 @@ export class UserService {
     }
     await user.save();
 
-    return { approved: loginToken !== null, loginToken };
+    return { approved: loginToken !== null, loginToken, already: false, status: (user as any).status };
   }
 
   // ----------------------- ลิงก์เข้าสู่ระบบครั้งเดียว -----------------------

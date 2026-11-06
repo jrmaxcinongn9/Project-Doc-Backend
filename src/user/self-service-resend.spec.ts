@@ -108,7 +108,7 @@ describe('ขอลิงก์ยืนยันใหม่ด้วยตั�
     expect(userService.sendVerifyMail).toHaveBeenCalled();
   });
 
-  it('บอกด้วยว่าลิงก์เดิมใช้ไม่ได้อีก', async () => {
+  it('บอกด้วยว่าลิงก์ในเมลฉบับก่อนยังใช้ได้', async () => {
     give();
 
     const result: any = await controller('true').resendVerifyMine({
@@ -116,6 +116,6 @@ describe('ขอลิงก์ยืนยันใหม่ด้วยตั�
       password,
     });
 
-    expect(result.message).toMatch(/ลิงก์เดิมใช้ไม่ได้อีก/);
+    expect(result.message).toMatch(/ลิงก์ในเมลฉบับก่อนยังใช้ได้/);
   });
 });
