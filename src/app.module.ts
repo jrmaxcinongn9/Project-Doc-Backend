@@ -1,3 +1,4 @@
+import { SupportModule } from './support/support.module';
 import {
   Module,
   MiddlewareConsumer,
@@ -87,6 +88,8 @@ import { RequestLoggerMiddleware } from './logger/request.middleware';
     FileModule,
     DocModule,
     ClassroomModule,
+    // แจ้งปัญหาจากหน้า support
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [AppService],

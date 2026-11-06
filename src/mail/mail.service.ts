@@ -334,6 +334,24 @@ export class MailService {
     );
   }
 
+  // admin ตอบเรื่องที่แจ้งผ่านหน้า support
+  async sendSupportReply(to: string, name: string, question: string, answer: string) {
+    const esc = (s: string) =>
+      s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+    const lines = (s: string) => esc(s).replace(/\n/g, '<br>');
+
+    await this.send(
+      to,
+      'ตอบกลับเรื่องที่คุณแจ้งไว้ในระบบ Document Internship',
+      `
+        <p>สวัสดีครับ คุณ${esc(name)}</p>
+        <p>${lines(answer)}</p>
+        <hr>
+        <p style="color:#666">เรื่องที่คุณแจ้งไว้:<br>${lines(question)}</p>
+      `,
+    );
+  }
+
   // admin อนุมัติแล้ว ส่งลิงก์เข้าสู่ระบบครั้งเดียวไปให้ กดแล้วเข้าระบบได้เลย
   async sendApprovedMail(to: string, link: string) {
     await this.send(

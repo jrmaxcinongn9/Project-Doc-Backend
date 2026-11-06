@@ -65,6 +65,19 @@ describe('MailService', () => {
       expect(body.html).toContain('https://web/login/magic?token=t');
     });
 
+    it('ตอบเรื่องแจ้งปัญหา กันโค้ด HTML ที่ผู้แจ้งพิมพ์มา และขึ้นบรรทัดใหม่ตามเดิม', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"ok":true}' });
+      (global as any).fetch = fetchMock;
+
+      await new MailService(configWith(base)).sendSupportReply('a@b.c', '<b>X</b>', '<script>alert(1)</script>', 'บรรทัด 1\nบรรทัด 2');
+
+      const html = JSON.parse(fetchMock.mock.calls[0][1].body).html;
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+      expect(html).toContain('&lt;b&gt;X&lt;/b&gt;');
+      expect(html).toContain('บรรทัด 1<br>บรรทัด 2');
+    });
+
     it('มาก่อน Brevo เมื่อตั้งไว้พร้อมกัน', async () => {
       const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"ok":true}' });
       (global as any).fetch = fetchMock;
